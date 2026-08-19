@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import io
 import logging
+import signal
 import sys
 import time
 
@@ -18,6 +19,7 @@ SCAN_SECONDS = 8.0
 POLL_SECONDS = 60
 RECONNECT_SECONDS = 15
 FAILURES_BEFORE_ERROR = 3  # ride out transient network blips on the last frame
+SHUTDOWN_SECONDS = 5  # give up on the goodbye if the panel stops answering
 
 logger = logging.getLogger("claude-ipixel")
 
@@ -117,6 +119,15 @@ class Panel:
         return display.render(current, width, height)
 
 
+async def power_off(client) -> None:
+    """Blank the panel on the way out, so it never sits on a stale frame."""
+    try:
+        await asyncio.wait_for(client.set_power(False), timeout=SHUTDOWN_SECONDS)
+        logger.info("panel powered off")
+    except Exception as exc:
+        logger.warning("could not power off the panel: %s", exc or type(exc).__name__)
+
+
 async def run(address: str | None, interval: int) -> None:
     panel = Panel()
     while True:
@@ -128,15 +139,19 @@ async def run(address: str | None, interval: int) -> None:
                 info = client.get_device_info()
                 logger.info("connected to %s (%dx%d)", target, info.width, info.height)
                 last_png, sent_at = None, None
-                while True:
-                    image = panel.frame(info.width, info.height)
-                    if image is not None:
-                        png = _to_png(image)
-                        if png != last_png:
-                            await client.send_image_hex(png.hex(), ".png")
-                            last_png, sent_at = png, time.time()
-                    _write_status(panel.status, sent_at)
-                    await asyncio.sleep(interval)
+                try:
+                    while True:
+                        image = panel.frame(info.width, info.height)
+                        if image is not None:
+                            png = _to_png(image)
+                            if png != last_png:
+                                await client.send_image_hex(png.hex(), ".png")
+                                last_png, sent_at = png, time.time()
+                        _write_status(panel.status, sent_at)
+                        await asyncio.sleep(interval)
+                except asyncio.CancelledError:
+                    await power_off(client)  # still connected here, unlike outside
+                    raise
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -152,6 +167,18 @@ async def run_once(address: str | None) -> None:
             "ERR", info.width, info.height
         )
         await client.send_image_hex(_to_png(image).hex(), ".png")
+
+
+async def serve(work) -> None:
+    """Run `work` under SIGINT/SIGTERM, cancelling it so shutdown is orderly."""
+    task = asyncio.ensure_future(work)
+    loop = asyncio.get_running_loop()
+    for received in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(received, task.cancel)
+    try:
+        await task
+    except asyncio.CancelledError:
+        logger.info("stopping")
 
 
 def _size(text: str) -> tuple[int, int]:
@@ -190,9 +217,7 @@ def main() -> None:
         return
 
     try:
-        asyncio.run(run_once(args.address) if args.once else run(args.address, args.interval))
-    except KeyboardInterrupt:
-        pass
+        asyncio.run(serve(run_once(args.address) if args.once else run(args.address, args.interval)))
     except RuntimeError as exc:
         logger.error("%s", exc)
         raise SystemExit(1)

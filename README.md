@@ -57,6 +57,8 @@ Two full-panel messages replace the bars on failure:
 
 A single network blip holds the last good frame rather than blanking the panel; it takes three in a row to show `ERR`.
 
+On Ctrl+C or `systemctl stop`, the panel is switched off in software before the process exits, so it never keeps showing figures from a service that is no longer running. If the panel has stopped answering, the attempt is given five seconds and then abandoned.
+
 ## Requirements
 
 - **An iPixel Color LED matrix.** Developed against a 64×20 panel (device type 5). All twenty sizes that `pypixelcolor` knows about are supported — from 32×16 up to 448×32, plus the square 64×64 — and the layout adapts to whichever one you have. I personally use [this one](https://share.temu.com/8lxqc2v6BUB)
