@@ -33,7 +33,8 @@ COLOR_PACE = (255, 0, 0)
 # Points down at where a bar would stand on an even spend. The top row has only
 # the panel margin above it to work with, so shorter markers are kept for tight
 # fits, down to a plain tick on the 16 pixel high panels.
-ARROWS = (("11111", "01110", "00100"), ("111", "010"), ("111",))
+ARROWS = (#("11111", "01110", "00100"), #<- have both arrows be the same..
+          ("111", "010"), ("111",))
 
 FONT = {
     "0": ("111", "101", "101", "101", "111"),
