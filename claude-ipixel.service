@@ -5,8 +5,8 @@ Wants=bluetooth.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/ammar/Documents/Programming/claudeIPixel
-ExecStart=/home/ammar/Documents/Programming/claudeIPixel/venv/bin/python service.py
+WorkingDirectory=/home/ammar/Documents/Programming/claude-ipixel
+ExecStart=/home/ammar/Documents/Programming/claude-ipixel/venv/bin/python service.py
 Restart=always
 RestartSec=15
 
