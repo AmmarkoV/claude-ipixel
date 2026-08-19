@@ -19,12 +19,18 @@ GLYPH_W, GLYPH_H, ADVANCE = 3, 5, 4
 LABEL_CHARS = 2  # "5H", "7D"
 VALUE_CHARS = 4  # widest value we ever draw: "100%", "144H", "2:22"
 
+WEEK_SECONDS = 7 * 24 * 3600
+
 COLOR_LABEL = (110, 110, 110)
 COLOR_FRAME = (48, 48, 48)
 COLOR_GOOD = (0, 224, 90)
 COLOR_WARN = (255, 176, 0)
 COLOR_LOW = (255, 80, 0)
 COLOR_EMPTY = (255, 0, 0)
+COLOR_PACE = (255, 0, 0)
+
+# Points down at where the 7 day bar would stand on an even spend, 5x3 pixels.
+ARROW = ("11111", "01110", "00100")
 
 FONT = {
     "0": ("111", "101", "101", "101", "111"),
@@ -57,19 +63,22 @@ def text_width(text: str, scale: int = 1) -> int:
     return (len(text) * ADVANCE - 1) * scale
 
 
-def draw_text(image: Image.Image, text: str, x: int, y: int, color, scale: int = 1) -> None:
+def _blit(image: Image.Image, rows: tuple[str, ...], x: int, y: int, color, scale: int) -> None:
     pixels = image.load()
+    for row, bits in enumerate(rows):
+        for col, bit in enumerate(bits):
+            if bit != "1":
+                continue
+            for dy in range(scale):
+                for dx in range(scale):
+                    px, py = x + col * scale + dx, y + row * scale + dy
+                    if 0 <= px < image.width and 0 <= py < image.height:
+                        pixels[px, py] = color
+
+
+def draw_text(image: Image.Image, text: str, x: int, y: int, color, scale: int = 1) -> None:
     for char in text:
-        glyph = FONT.get(char, FONT[" "])
-        for row, bits in enumerate(glyph):
-            for col, bit in enumerate(bits):
-                if bit != "1":
-                    continue
-                for dy in range(scale):
-                    for dx in range(scale):
-                        px, py = x + col * scale + dx, y + row * scale + dy
-                        if 0 <= px < image.width and 0 <= py < image.height:
-                            pixels[px, py] = color
+        _blit(image, FONT.get(char, FONT[" "]), x, y, color, scale)
         x += ADVANCE * scale
 
 
@@ -138,6 +147,34 @@ def _format_countdown(seconds: float | None) -> str:
     return f"{hours}:{minutes:02d}"
 
 
+def pace_fraction(limit: Limit) -> float | None:
+    """Where the weekly bar would stand if the quota were spent evenly: the
+    share of the rolling 7 day window still to run. None if the reset is
+    unknown."""
+    seconds = limit.seconds_until_reset()
+    if seconds is None:
+        return None
+    return min(1.0, seconds / WEEK_SECONDS)
+
+
+def _draw_pace_arrow(image: Image.Image, layout: Layout, limit: Limit) -> None:
+    """Mark the even-spend point on the weekly bar, in the gap above it."""
+    fraction = pace_fraction(limit)
+    if fraction is None or not layout.show_bar:
+        return
+
+    height = len(ARROW) * layout.scale
+    y = layout.row_y[1] - height
+    if y < layout.row_y[0] + layout.bar_h:
+        return  # the rows sit too close together to fit an arrow between them
+
+    inner_x = layout.bar_x + layout.scale  # inside the bar frame
+    inner_w = layout.bar_w - 2 * layout.scale
+    tip = inner_x + round(inner_w * fraction)
+    x = min(max(tip - 2 * layout.scale, 0), image.width - len(ARROW[0]) * layout.scale)
+    _blit(image, ARROW, x, y, COLOR_PACE, layout.scale)
+
+
 def _draw_bar(image: Image.Image, layout: Layout, y: int, fraction: float, color) -> None:
     pixels = image.load()
     thickness = layout.scale
@@ -180,6 +217,7 @@ def render(usage: Usage, width: int = DEFAULT_SIZE[0], height: int = DEFAULT_SIZ
     layout = layout_for(width, height)
     _draw_row(image, layout, "5H", usage.session, layout.row_y[0])
     _draw_row(image, layout, "7D", usage.week, layout.row_y[1])
+    _draw_pace_arrow(image, layout, usage.week)
     return image
 
 

@@ -28,6 +28,8 @@ Two rows: how much of the rolling **5-hour session** window you have left, and h
 
 Each row is `label · bar · number`. Both the bar and the number show what is **remaining**, so the bar drains as you work.
 
+A red arrow sits between the two rows, pointing down at the weekly bar. It marks where that bar would stand if the week's quota were spent evenly: the share of the rolling 7-day window still to run, so it walks left as the week burns down. Bar filled past the arrow means you are ahead of an even spend; bar short of it means you are burning faster than seven equal days. It is hidden on panels too narrow for a bar.
+
 | Remaining | Colour |
 | --- | --- |
 | 50–100% | green |

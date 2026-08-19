@@ -4,6 +4,8 @@ import argparse
 import asyncio
 import io
 import logging
+import sys
+import time
 
 from bleak import BleakScanner
 from pypixelcolor import AsyncClient
@@ -18,6 +20,47 @@ RECONNECT_SECONDS = 15
 FAILURES_BEFORE_ERROR = 3  # ride out transient network blips on the last frame
 
 logger = logging.getLogger("claude-ipixel")
+
+# A single rewritten status line only makes sense on a terminal; under systemd
+# stdout is the journal, where \r is noise, so there we keep plain log lines.
+INTERACTIVE = sys.stdout.isatty()
+
+
+class StatusLineHandler(logging.StreamHandler):
+    """Wipe the in-place status line before a log record prints over it."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if INTERACTIVE:
+            self.stream.write("\r\033[K")
+        super().emit(record)
+
+
+def _format_reset(seconds: float | None) -> str:
+    if seconds is None:
+        return "--"
+    minutes = int(seconds // 60)
+    hours, minutes = divmod(minutes, 60)
+    days, hours = divmod(hours, 24)
+    if days:
+        return f"{days}d{hours:02d}h"
+    return f"{hours}h{minutes:02d}m"
+
+
+def _quota_status(current: usage.Usage) -> str:
+    return "  ".join(
+        f"{label} {limit.remaining:3.0f}% left, resets in {_format_reset(limit.seconds_until_reset())}"
+        for label, limit in (("5H", current.session), ("7D", current.week))
+    )
+
+
+def _write_status(status: str, sent_at: float | None) -> None:
+    if not INTERACTIVE:
+        return
+    line = f"{time.strftime('%H:%M:%S')}  {status}"
+    if sent_at is not None:
+        line += f"  [sent {time.strftime('%H:%M:%S', time.localtime(sent_at))}]"
+    sys.stdout.write(f"\r\033[K{line}")
+    sys.stdout.flush()
 
 
 def _to_png(image) -> bytes:
@@ -51,6 +94,7 @@ class Panel:
 
     def __init__(self):
         self.consecutive_failures = 0
+        self.status = "starting"
 
     def frame(self, width: int, height: int):
         try:
@@ -58,15 +102,18 @@ class Panel:
         except usage.AuthError as exc:
             logger.error("auth failed: %s", exc)
             self.consecutive_failures = 0
+            self.status = f"auth failed: {exc}"
             return display.render_message("AUTH", width, height)
         except Exception as exc:
             self.consecutive_failures += 1
             logger.warning("fetch failed (%d): %s", self.consecutive_failures, exc)
+            self.status = f"fetch failed ({self.consecutive_failures}): {exc}"
             if self.consecutive_failures < FAILURES_BEFORE_ERROR:
                 return None  # keep whatever is on screen
             return display.render_message("ERR", width, height)
 
         self.consecutive_failures = 0
+        self.status = _quota_status(current)
         return display.render(current, width, height)
 
 
@@ -80,14 +127,15 @@ async def run(address: str | None, interval: int) -> None:
             async with AsyncClient(target) as client:
                 info = client.get_device_info()
                 logger.info("connected to %s (%dx%d)", target, info.width, info.height)
-                last_png = None
+                last_png, sent_at = None, None
                 while True:
                     image = panel.frame(info.width, info.height)
                     if image is not None:
                         png = _to_png(image)
                         if png != last_png:
                             await client.send_image_hex(png.hex(), ".png")
-                            last_png = png
+                            last_png, sent_at = png, time.time()
+                    _write_status(panel.status, sent_at)
                     await asyncio.sleep(interval)
         except asyncio.CancelledError:
             raise
@@ -126,7 +174,14 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[StatusLineHandler(sys.stdout)],
+    )
+    if INTERACTIVE:
+        # Per-frame chatter from the BLE library would trample the status line.
+        logging.getLogger("pypixelcolor").setLevel(logging.WARNING)
 
     if args.preview:
         width, height = args.size
@@ -141,6 +196,9 @@ def main() -> None:
     except RuntimeError as exc:
         logger.error("%s", exc)
         raise SystemExit(1)
+    finally:
+        if INTERACTIVE:
+            sys.stdout.write("\n")  # leave the status line behind on exit
 
 
 if __name__ == "__main__":
