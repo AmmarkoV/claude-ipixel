@@ -19,6 +19,7 @@ GLYPH_W, GLYPH_H, ADVANCE = 3, 5, 4
 LABEL_CHARS = 2  # "5H", "7D"
 VALUE_CHARS = 4  # widest value we ever draw: "100%", "144H", "2:22"
 
+SESSION_SECONDS = 5 * 3600
 WEEK_SECONDS = 7 * 24 * 3600
 
 COLOR_LABEL = (110, 110, 110)
@@ -29,8 +30,10 @@ COLOR_LOW = (255, 80, 0)
 COLOR_EMPTY = (255, 0, 0)
 COLOR_PACE = (255, 0, 0)
 
-# Points down at where the 7 day bar would stand on an even spend, 5x3 pixels.
-ARROW = ("11111", "01110", "00100")
+# Points down at where a bar would stand on an even spend. The top row has only
+# the panel margin above it to work with, so shorter markers are kept for tight
+# fits, down to a plain tick on the 16 pixel high panels.
+ARROWS = (("11111", "01110", "00100"), ("111", "010"), ("111",))
 
 FONT = {
     "0": ("111", "101", "101", "101", "111"),
@@ -147,32 +150,42 @@ def _format_countdown(seconds: float | None) -> str:
     return f"{hours}:{minutes:02d}"
 
 
-def pace_fraction(limit: Limit) -> float | None:
-    """Where the weekly bar would stand if the quota were spent evenly: the
-    share of the rolling 7 day window still to run. None if the reset is
-    unknown."""
+def pace_fraction(limit: Limit, window_seconds: float) -> float | None:
+    """Where a bar would stand if its quota were spent evenly: the share of the
+    rolling window still to run. None if the reset is unknown."""
     seconds = limit.seconds_until_reset()
     if seconds is None:
         return None
-    return min(1.0, seconds / WEEK_SECONDS)
+    return min(1.0, seconds / window_seconds)
 
 
-def _draw_pace_arrow(image: Image.Image, layout: Layout, limit: Limit) -> None:
-    """Mark the even-spend point on the weekly bar, in the gap above it."""
-    fraction = pace_fraction(limit)
+def _arrow_for(space: int, scale: int) -> tuple[tuple[str, ...], int] | None:
+    """Biggest arrow that fits in `space` rows, or None if none does."""
+    for rows in ARROWS:
+        for candidate in range(scale, 0, -1):
+            if len(rows) * candidate <= space:
+                return rows, candidate
+    return None
+
+
+def _draw_pace_arrow(
+    image: Image.Image, layout: Layout, limit: Limit, window: float, bar_y: int, space: int
+) -> None:
+    """Mark the even-spend point on a bar, in the rows immediately above it."""
+    fraction = pace_fraction(limit, window)
     if fraction is None or not layout.show_bar:
         return
+    arrow = _arrow_for(space, layout.scale)
+    if arrow is None:
+        return  # nothing above the bar to draw into
 
-    height = len(ARROW) * layout.scale
-    y = layout.row_y[1] - height
-    if y < layout.row_y[0] + layout.bar_h:
-        return  # the rows sit too close together to fit an arrow between them
-
+    rows, scale = arrow
     inner_x = layout.bar_x + layout.scale  # inside the bar frame
     inner_w = layout.bar_w - 2 * layout.scale
     tip = inner_x + round(inner_w * fraction)
-    x = min(max(tip - 2 * layout.scale, 0), image.width - len(ARROW[0]) * layout.scale)
-    _blit(image, ARROW, x, y, COLOR_PACE, layout.scale)
+    width = len(rows[0]) * scale
+    x = min(max(tip - (len(rows[0]) // 2) * scale, 0), image.width - width)
+    _blit(image, rows, x, bar_y - len(rows) * scale, COLOR_PACE, scale)
 
 
 def _draw_bar(image: Image.Image, layout: Layout, y: int, fraction: float, color) -> None:
@@ -217,7 +230,17 @@ def render(usage: Usage, width: int = DEFAULT_SIZE[0], height: int = DEFAULT_SIZ
     layout = layout_for(width, height)
     _draw_row(image, layout, "5H", usage.session, layout.row_y[0])
     _draw_row(image, layout, "7D", usage.week, layout.row_y[1])
-    _draw_pace_arrow(image, layout, usage.week)
+    _draw_pace_arrow(
+        image, layout, usage.session, SESSION_SECONDS, layout.row_y[0], layout.row_y[0]
+    )
+    _draw_pace_arrow(
+        image,
+        layout,
+        usage.week,
+        WEEK_SECONDS,
+        layout.row_y[1],
+        layout.row_y[1] - layout.row_y[0] - layout.bar_h,
+    )
     return image
 
 
