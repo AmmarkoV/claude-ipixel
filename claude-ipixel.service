@@ -1,0 +1,14 @@
+[Unit]
+Description=Claude usage on iPixel LED matrix
+After=bluetooth.target
+Wants=bluetooth.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ammar/Documents/Programming/claudeIPixel
+ExecStart=/home/ammar/Documents/Programming/claudeIPixel/venv/bin/python service.py
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=default.target
