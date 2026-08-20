@@ -11,6 +11,11 @@ Two rows: how much of the rolling **5-hour session** window you have left, and h
 ## Contents
 
 - [What you're looking at](#what-youre-looking-at)
+- [Today's git activity](#todays-git-activity)
+  - [Where the repository list lives](#where-the-repository-list-lives)
+- [Your gitranks standing](#your-gitranks-standing)
+  - [Where the GitHub login lives](#where-the-github-login-lives)
+- [Google Scholar citations](#google-scholar-citations)
 - [Requirements](#requirements)
 - [Install](#install)
 - [Usage](#usage)
@@ -61,8 +66,177 @@ A single network blip holds the last good frame rather than blanking the panel; 
 
 On Ctrl+C or `systemctl stop`, the panel is switched off in software before the process exits, so it never keeps showing figures from a service that is no longer running. If the panel has stopped answering, the attempt is given five seconds and then abandoned.
 
+## Today's git activity
+
+Alongside the quota there are four views of how much code you have actually written today, counted straight out of a list of git repositories you keep in your config directory. See [Where the repository list lives](#where-the-repository-list-lives) for how to create it.
+
+Each repository is asked for its commits since **local midnight** on the current `HEAD`, merges excluded. Pick a view with `--view`, or rotate through several:
+
+| `--view` | Shows |
+| --- | --- |
+| `quota` | The two quota bars. The default, and what the panel has always drawn |
+| `net` | Today's net line count across every repository, as large as the panel will take it — green when you are adding, orange when you are deleting |
+| `churn` | Two rows, `+` added over `-` removed. The bars split one total, so a day spent deleting reads at a glance |
+| `repos` | A row per repository — initials, share of the day's churn, and its net lines |
+| `commits` | A row per repository — initials, share of the day's commits, and the count |
+| `rank` | Your three [gitranks](#your-gitranks-standing) rankings — stars, contributions, followers — each bar the share of ranked profiles you are above |
+| `tier` | The tier gitranks leads your profile with, as large as the panel will take it |
+| `cites` | Your [Google Scholar](#google-scholar-citations) citation count, as large as the panel will take it |
+| `hindex` | h-index over i10-index, each bar the share earned in Scholar's recent window |
+| `all` | Rotate through every view above |
+
+`--view` also takes a comma-separated selection, so you can rotate through just the two you care about:
+
+```bash
+./venv/bin/python service.py --view quota,net --rotate 20
+```
+
+Repositories are sorted busiest-first and only as many rows as the panel can hold are drawn, so on a 16-pixel panel you see the top two. Each bar is that repository's share of the *leader* rather than of the total, which stops a lone active repository from drawing a full bar beside three empty ones. Labels are the initials of an underscore- or dash-separated name — `magician_vision_classifier` becomes `MVC` — or the first three letters of a single-word name.
+
+Line counts are capped at four characters: `9999`, then `10K`, then `1M`. Binary files report no line counts to git and are skipped rather than counted as zero.
+
+### Where the repository list lives
+
+The list is **machine-specific** — absolute paths that mean nothing on another host — so the checkout deliberately does not carry one. Your list goes in your config directory instead:
+
+```bash
+mkdir -p ~/.config/claude-ipixel
+cp github-repos.txt.example ~/.config/claude-ipixel/repos.txt
+$EDITOR ~/.config/claude-ipixel/repos.txt
+```
+
+One absolute path per line. Blank lines and anything after a `#` are ignored, `~` is expanded, and anything that is not a git repository is skipped with a warning:
+
+```
+# things I am actually working on
+~/Programming/project-one
+~/Programming/project-two   # comments can trail a path too
+```
+
+Three locations are consulted, first hit wins:
+
+| Order | Location | For |
+| --- | --- | --- |
+| 1 | `--repos PATH` | A one-off, or a second list for a second panel |
+| 2 | `$XDG_CONFIG_HOME/claude-ipixel/repos.txt`, i.e. `~/.config/claude-ipixel/repos.txt` | **The normal place.** Outside the checkout, so `git pull`, moving the clone, or reinstalling never touches it |
+| 3 | `github-repos.txt` beside the code | Fallback for running straight out of a clone. `.gitignore`d, so a machine-specific list can never follow you into a commit |
+
+Whichever it picks is logged at startup, so there is never any doubt:
+
+```
+INFO watching 18 repositories from /home/you/.config/claude-ipixel/repos.txt
+```
+
+If none of them exists, the git views draw `NONE` and the log tells you exactly what to run:
+
+```
+WARNING no repository list at /home/you/.config/claude-ipixel/repos.txt (No such file or directory)
+WARNING create one: mkdir -p /home/you/.config/claude-ipixel && cp .../github-repos.txt.example /home/you/.config/claude-ipixel/repos.txt
+```
+
+**Moving an existing list into place** — if you already have a `github-repos.txt` in your checkout:
+
+```bash
+mkdir -p ~/.config/claude-ipixel
+mv github-repos.txt ~/.config/claude-ipixel/repos.txt
+```
+
+Nothing else changes: the paths inside it are already absolute, and the service picks the new location up on its next start.
+
+### What it costs
+
+Rotating every 15 seconds does **not** mean scanning every 15 seconds. Both sources are polled on their own schedule and cached, so a tick that finds them warm draws entirely from memory:
+
+- **The usage endpoint** is called at most once per `--interval`, no matter how often the frame is redrawn — and not at all if no chosen view is `quota`.
+- **Each repository** gets at most one `git log` per `--git-interval`, and even that is skipped while the repository has not moved. A commit rewrites `.git/logs/HEAD`, so its mtime plus the current date is enough to serve the previous answer from cache. An idle set of repositories costs a `stat` per repository, not a process.
+- **gitranks and Google Scholar** are somebody else's servers, so each is asked **once a day at most** and the answer is kept in `~/.cache/claude-ipixel/`. Neither is touched at all unless one of its views is on screen and its config file exists. A failure backs off for an hour rather than retrying on the next tick, and both refresh on a background thread — a page load that takes a minute never holds up a redraw, the panel simply keeps yesterday's numbers until the new ones land.
+
+In practice a full hour of rotating through all five views across three repositories spawns **three** `git` processes — one per repository, on the first tick — and none after that until you commit something.
+
+## Your gitranks standing
+
+[gitranks.com](https://gitranks.com/) ranks GitHub profiles by stars, by stars on repositories you have merged PRs into, and by followers. Two views put that on the panel:
+
+| `--view` | Shows |
+| --- | --- |
+| `rank` | Three rows — `S`tars, `C`ontributions, `F`ollowers. The value is the "top N%" the site gives you; the bar is the share of ranked profiles you are above, so a full bar is the top of the board rather than the bottom |
+| `tier` | The tier the profile page leads with — `ELITE 1`, `MASTER 5` — as large as the panel will take it |
+
+Bars are green in the top 10%, amber to the halfway mark, orange below it. Everything the page states is parsed, not just what fits on the panel — position, how many are ranked, the percentile, the month's movement, the score, the tier and how far the next one is — and the whole lot goes to the status line and the journal:
+
+```
+gitranks Elite 1  S #47,939 top 3%  C #1,357,286 top 50%  F #63,602 top 3%
+```
+
+Run the module on its own to see all of it:
+
+```bash
+./venv/bin/python gitranks.py
+```
+
+```
+AmmarkoV: Global Rank Elite 1  (Influencer)
+Stars Rank        Master 5   #   47,939 / 1,600,000  top 3%  month +1,940  score 843  (2 to Elite 1)
+Contributor Rank  Adept 2    #1,357,286 / 3,200,000  top 50%  month -12,435  score 1,705  (472 to Adept 3)
+Followers Rank    Elite 1    #   63,602 / 2,400,000  top 3%  month +584  score 189  (2 to Elite 2)
+```
+
+**Why this one needs a browser.** gitranks sits behind a Cloudflare managed challenge: every HTML and `/api/` path answers `403` to any plain HTTP client, whatever headers it sends. So the page is rendered in a **headless Firefox**, driven through `geckodriver` over its plain HTTP interface — no Selenium, no extra Python dependency. Firefox keeps its own profile in `~/.cache/claude-ipixel/gitranks-profile` (or under `~/snap/firefox/common/` for a snap build, which cannot write anywhere else), so the clearance cookie survives between runs and one page load a day is genuinely all it takes. Their `robots.txt` allows `/profile/` at a ten-second crawl delay; once every 86,400 seconds is well inside that.
+
+If `geckodriver` or Firefox is missing the views stay empty and the log says so — nothing else is affected.
+
+### Where the GitHub login lives
+
+One line, in your config directory:
+
+```bash
+mkdir -p ~/.config/claude-ipixel
+echo AmmarkoV > ~/.config/claude-ipixel/github-user.txt
+```
+
+Three locations are consulted, first hit wins — the same order as the repository list:
+
+| Order | Location | For |
+| --- | --- | --- |
+| 1 | `--github-user PATH` | A one-off, or a second profile for a second panel |
+| 2 | `~/.config/claude-ipixel/github-user.txt` | **The normal place** |
+| 3 | `github-user.txt` beside the code | Fallback for running out of a clone. `.gitignore`d |
+
+**With no such file the feature is simply off**: no browser is started, no request is made, and the `rank` and `tier` views draw nothing while the log tells you what is missing. `github-user.txt.example` has the same note in it.
+
+## Google Scholar citations
+
+If you publish, two more views:
+
+| `--view` | Shows |
+| --- | --- |
+| `cites` | Total citations, as large as the panel will take it |
+| `hindex` | Two rows, `H` over `I` — h-index and i10-index. Each bar is the share of that index earned inside Scholar's recent window, so it reads as "how much of this is recent" |
+
+Configuration is one line, and takes either the profile id or the URL you have in the address bar:
+
+```bash
+mkdir -p ~/.config/claude-ipixel
+echo 'https://scholar.google.gr/citations?user=sDOdhtwAAAAJ&hl=en' > ~/.config/claude-ipixel/google-scholar.txt
+```
+
+`--scholar PATH` overrides it, `google-scholar.txt` beside the code is the fallback, and with none of them the views are off and nothing is fetched. Unlike gitranks this needs no browser — Scholar serves the page to a plain HTTPS request. The module runs on its own too:
+
+```bash
+./venv/bin/python scholar.py
+```
+
+```
+Ammar Qammaz (sDOdhtwAAAAJ)
+                 All  Since 2021
+citations        704         433
+h-index           11           9
+i10-index         13           9
+```
+
 ## Requirements
 
+- **Firefox and `geckodriver`** — *optional*, and only for the [gitranks](#your-gitranks-standing) views. Everything else, Google Scholar included, runs without them.
 - **An iPixel Color LED matrix.** Developed against a 64×20 panel (device type 5). All twenty sizes that `pypixelcolor` knows about are supported — from 32×16 up to 448×32, plus the square 64×64 — and the layout adapts to whichever one you have. I personally use [this one](https://share.temu.com/8lxqc2v6BUB)
 - **Bluetooth LE** on the host.
 - **Python 3.10+** (the code uses `X | None` annotations).
@@ -78,6 +252,16 @@ python3 -m venv venv
 ```
 
 `pypixelcolor` is the only direct dependency; it pulls in `bleak`, `pillow`, `crccheck` and `websockets`.
+
+If you want the [git activity views](#todays-git-activity), create your repository list too — this is the one piece of per-machine setup, and it lives outside the checkout so it survives everything you do to the clone:
+
+```bash
+mkdir -p ~/.config/claude-ipixel
+cp github-repos.txt.example ~/.config/claude-ipixel/repos.txt
+$EDITOR ~/.config/claude-ipixel/repos.txt
+```
+
+Skip it if you only want the quota bars; nothing else depends on it.
 
 Check it renders before you involve any hardware:
 
@@ -95,6 +279,12 @@ That draws your real current usage to a PNG. If it produces a frame with two bar
 
 With no arguments it scans for your panel, connects, and redraws every 60 seconds.
 
+`claude-ipixel.sh` is a thin wrapper that saves typing the virtualenv path. It forwards everything you give it straight through to `service.py`, so the two are interchangeable:
+
+```bash
+./claude-ipixel.sh --view all --interval 420
+```
+
 | Flag | Default | What |
 | --- | --- | --- |
 | `--address AA:BB:..` | scan | Panel's BLE address; skips the scan |
@@ -102,6 +292,12 @@ With no arguments it scans for your panel, connects, and redraws every 60 second
 | `--once` | | Draw a single frame and exit |
 | `--preview PATH` | | Render to a PNG instead of the panel — no Bluetooth needed |
 | `--size WxH` | `64x20` | Panel size for `--preview` only; read from the device otherwise |
+| `--view NAME` | `quota` | What to draw — see [Today's git activity](#todays-git-activity), [gitranks](#your-gitranks-standing) and [Scholar](#google-scholar-citations). Takes a comma-separated list, or `all` |
+| `--rotate N` | `15` | Seconds per view, when more than one is selected |
+| `--repos PATH` | `~/.config/claude-ipixel/repos.txt` | Repository list to count today's work in; see [above](#where-the-repository-list-lives) for the full search order |
+| `--github-user PATH` | `~/.config/claude-ipixel/github-user.txt` | GitHub login to rank on gitranks; see [above](#where-the-github-login-lives) |
+| `--scholar PATH` | `~/.config/claude-ipixel/google-scholar.txt` | Google Scholar profile id or URL; see [above](#google-scholar-citations) |
+| `--git-interval N` | `300` | Seconds between repository rescans |
 
 ### Finding your panel
 
@@ -151,6 +347,8 @@ systemctl --user status claude-ipixel
 journalctl --user -u claude-ipixel -f
 ```
 
+The unit needs no repository configuration of its own: the list is found at `~/.config/claude-ipixel/repos.txt` for the user the unit runs as, which is the same user whose credentials it already reads. Add `--view` to the unit's `ExecStart` if you want something other than the quota bars.
+
 To keep the panel running while you are logged out:
 
 ```bash
@@ -195,6 +393,21 @@ anthropic-beta: oauth-2025-04-20
 
 The response carries `five_hour` and `seven_day` objects, each with a `utilization` percentage and a `resets_at` timestamp. That is the entire data source — two numbers and two timestamps.
 
+`repos.py` reads the repository list and shells out to `git log --since=midnight --no-merges --numstat` once per repository, behind the mtime cache described above. It is runnable on its own if you just want the numbers:
+
+```bash
+./venv/bin/python repos.py
+```
+
+```
+MVC    5c  +5872   -99      magician_vision_classifier
+MGA    1c  +124    -37      magician_grabber_annotator
+MMB    0c  +0      -0       magician_main_board
+ALL    6c  +5996   -136     net +5860
+```
+
+`gitranks.py` and `scholar.py` are the two daily scrapes. `gitranks.py` starts `geckodriver`, opens a headless Firefox on your profile page, polls the DOM until the real page replaces the Cloudflare challenge, and reads the three rank cards out of the rendered text. `scholar.py` needs none of that — one `urllib` request, and the summary table is parsed straight out of the HTML. Both hand their scheduling to `daily.py`, which owns the once-a-day rule, the JSON cache under `~/.cache/claude-ipixel/`, the hour-long backoff after a failure, and the background thread that keeps a slow page load off the redraw path.
+
 `display.py` renders an RGB image at the panel's exact dimensions using a hand-rolled 3×5 bitmap font. PIL's bundled fonts start around 11 pixels tall, which does not fit a 16-pixel panel split into two rows, so the glyphs are defined as bitmaps and scaled by whole pixels.
 
 `service.py` polls, renders, and pushes the frame as a PNG over BLE via `pypixelcolor`. **The panel is only redrawn when the rendered frame actually changes**, so an idle display generates no Bluetooth traffic at all.
@@ -214,6 +427,11 @@ The response carries `five_hour` and `seven_day` objects, each with a `utilizati
 
 - The usage endpoint is undocumented and unversioned. It may change or disappear without warning.
 - Only the 5-hour and 7-day windows are drawn. The response also carries per-model and spend fields, which are ignored.
+- Git counts are **committed** work only — nothing uncommitted in the working tree is counted, so the figures step up when you commit rather than while you type.
+- Every commit on `HEAD` since midnight is counted, whoever wrote it. In a repository you share, a colleague's merge-free commits land in your totals.
+- Lines are a famously poor proxy for work. A generated file or a vendored dependency will dwarf a day of real thinking.
+- The gitranks and Scholar figures are scraped from pages meant for human eyes. A redesign at either end breaks the parse — the views go empty and the log says why, but nothing else stops.
+- gitranks needs a real browser on the machine. Without Firefox and `geckodriver` those two views never fill in.
 - Bluetooth LE only. Panels with WiFi firmware are not addressed over the network.
 - Not affiliated with, endorsed by, or supported by Anthropic.
 

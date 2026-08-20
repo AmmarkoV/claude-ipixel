@@ -7,19 +7,27 @@ import logging
 import signal
 import sys
 import time
+from pathlib import Path
 
 from bleak import BleakScanner
 from pypixelcolor import AsyncClient
 
 import display
+import gitranks
+import repos
+import scholar
 import usage
 
 NAME_PREFIX = "LED_BLE_"  # panels advertise as LED_BLE_<last 4 bytes of the MAC>
 SCAN_SECONDS = 8.0
 POLL_SECONDS = 60
+ROTATE_SECONDS = 15
 RECONNECT_SECONDS = 15
 FAILURES_BEFORE_ERROR = 3  # ride out transient network blips on the last frame
 SHUTDOWN_SECONDS = 5  # give up on the goodbye if the panel stops answering
+
+VIEW_QUOTA = "quota"
+VIEWS = (VIEW_QUOTA,) + display.GIT_VIEWS + display.GITRANKS_VIEWS + display.SCHOLAR_VIEWS
 
 logger = logging.getLogger("claude-ipixel")
 
@@ -92,31 +100,94 @@ async def discover_address(timeout: float = SCAN_SECONDS) -> str:
 
 
 class Panel:
-    """Turns the usage endpoint into a frame, tolerating transient failures."""
+    """Turns the usage endpoint, the repository scan and the daily scrapes
+    into a frame.
 
-    def __init__(self):
+    Every source is polled on its own schedule rather than once per frame, so
+    rotating through views every few seconds costs no extra requests and no
+    extra `git` processes -- a tick that finds the caches warm draws from
+    memory alone. The two scrapes go further and refresh on a thread, so a
+    page load that takes a minute never holds up a redraw.
+    """
+
+    def __init__(self, views=(VIEW_QUOTA,), scanner=None, ranks=None, cites=None,
+                 interval=POLL_SECONDS, rotate=ROTATE_SECONDS):
+        self.views = tuple(views)
+        self.scanner = scanner
+        self.ranks = ranks
+        self.cites = cites
+        self.interval = interval
+        self.rotate = rotate
         self.consecutive_failures = 0
         self.status = "starting"
+        self._usage = None
+        self._error = None
+        self._quota_status = "starting"
+        self._fetched_at = None
 
-    def frame(self, width: int, height: int):
+    def view(self, now: float | None = None) -> str:
+        """Which view this moment belongs to, straight off the wall clock."""
+        if len(self.views) == 1:
+            return self.views[0]
+        now = time.time() if now is None else now
+        return self.views[int(now // self.rotate) % len(self.views)]
+
+    def _refresh_usage(self) -> None:
+        """Fetch at most once per interval, keeping the outcome for later ticks."""
+        if VIEW_QUOTA not in self.views:
+            return  # nothing on screen needs the endpoint, so don't ask it
+        now = time.monotonic()
+        # The half-second of slack keeps a tick that lands a hair early from
+        # silently doubling the poll interval.
+        if self._fetched_at is not None and now - self._fetched_at < self.interval - 0.5:
+            return
+        self._fetched_at = now
         try:
-            current = usage.fetch()
+            self._usage = usage.fetch()
         except usage.AuthError as exc:
             logger.error("auth failed: %s", exc)
-            self.consecutive_failures = 0
-            self.status = f"auth failed: {exc}"
-            return display.render_message("AUTH", width, height)
+            self._usage, self._error, self.consecutive_failures = None, "AUTH", 0
+            self._quota_status = f"auth failed: {exc}"
         except Exception as exc:
             self.consecutive_failures += 1
             logger.warning("fetch failed (%d): %s", self.consecutive_failures, exc)
-            self.status = f"fetch failed ({self.consecutive_failures}): {exc}"
-            if self.consecutive_failures < FAILURES_BEFORE_ERROR:
-                return None  # keep whatever is on screen
-            return display.render_message("ERR", width, height)
+            self._usage = None
+            # Ride out transient blips on the last frame; only a run of them errors.
+            self._error = "ERR" if self.consecutive_failures >= FAILURES_BEFORE_ERROR else None
+            self._quota_status = f"fetch failed ({self.consecutive_failures}): {exc}"
+        else:
+            self._error, self.consecutive_failures = None, 0
+            self._quota_status = _quota_status(self._usage)
 
-        self.consecutive_failures = 0
-        self.status = _quota_status(current)
-        return display.render(current, width, height)
+    def frame(self, width: int, height: int):
+        self._refresh_usage()
+        stats = self.scanner.stats() if self.scanner is not None else None
+        profile = self.ranks.value() if self.ranks is not None else None
+        citations = self.cites.value() if self.cites is not None else None
+
+        parts = [self._quota_status] if VIEW_QUOTA in self.views else []
+        if stats is not None:
+            parts.append(repos.summary(stats))
+        if self.ranks is not None:
+            parts.append(gitranks.summary(profile))
+        if self.cites is not None:
+            parts.append(scholar.summary(citations))
+        self.status = "  |  ".join(parts)
+
+        view = self.view()
+        if view in display.GIT_VIEWS and stats is not None:
+            return display.render_git(view, stats, width, height)
+        if view in display.GITRANKS_VIEWS and profile is not None:
+            return display.render_gitranks(view, profile, width, height)
+        if view in display.SCHOLAR_VIEWS and citations is not None:
+            return display.render_scholar(view, citations, width, height)
+        if view != VIEW_QUOTA:
+            return None  # its source has nothing yet; leave the last frame up
+        if self._usage is not None:
+            return display.render(self._usage, width, height)
+        if self._error is not None:
+            return display.render_message(self._error, width, height)
+        return None  # keep whatever is on screen
 
 
 async def power_off(client) -> None:
@@ -128,8 +199,7 @@ async def power_off(client) -> None:
         logger.warning("could not power off the panel: %s", exc or type(exc).__name__)
 
 
-async def run(address: str | None, interval: int) -> None:
-    panel = Panel()
+async def run(address: str | None, panel: "Panel", tick: float) -> None:
     while True:
         try:
             # Rediscover on every reconnect: these panels use a random BLE
@@ -148,7 +218,7 @@ async def run(address: str | None, interval: int) -> None:
                                 await client.send_image_hex(png.hex(), ".png")
                                 last_png, sent_at = png, time.time()
                         _write_status(panel.status, sent_at)
-                        await asyncio.sleep(interval)
+                        await asyncio.sleep(tick)
                 except asyncio.CancelledError:
                     await power_off(client)  # still connected here, unlike outside
                     raise
@@ -159,11 +229,11 @@ async def run(address: str | None, interval: int) -> None:
             await asyncio.sleep(RECONNECT_SECONDS)
 
 
-async def run_once(address: str | None) -> None:
+async def run_once(address: str | None, panel: "Panel") -> None:
     target = address or await discover_address()
     async with AsyncClient(target) as client:
         info = client.get_device_info()
-        image = Panel().frame(info.width, info.height) or display.render_message(
+        image = panel.frame(info.width, info.height) or display.render_message(
             "ERR", info.width, info.height
         )
         await client.send_image_hex(_to_png(image).hex(), ".png")
@@ -186,6 +256,30 @@ def _size(text: str) -> tuple[int, int]:
     return int(width), int(height)
 
 
+def read_config(override: Path | None, read, default: Path, what: str) -> str | None:
+    """One line of configuration, with a warning when a view wants it and it
+    is not there -- an unconfigured scrape is a silent no-op otherwise."""
+    value = read(override) if override is not None else read()
+    if value is None:
+        logger.warning(
+            "no %s configuration in %s -- its views will be empty", what, override or default
+        )
+    return value
+
+
+def _views(text: str) -> tuple[str, ...]:
+    """"all", or a comma-separated selection to rotate through."""
+    if text == "all":
+        return VIEWS
+    chosen = tuple(name.strip().lower() for name in text.split(",") if name.strip())
+    unknown = [name for name in chosen if name not in VIEWS]
+    if unknown or not chosen:
+        raise argparse.ArgumentTypeError(
+            f"unknown view {', '.join(unknown) or text!r}; pick from {', '.join(VIEWS)} or all"
+        )
+    return chosen
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--address", help="BLE MAC address (default: scan for one)")
@@ -199,6 +293,44 @@ def main() -> None:
         metavar="WxH",
         help="panel size for --preview (read from the device otherwise)",
     )
+    parser.add_argument(
+        "--view",
+        type=_views,
+        default=(VIEW_QUOTA,),
+        help=f"what to draw: {', '.join(VIEWS)}, all, or a comma-separated selection",
+    )
+    parser.add_argument(
+        "--rotate", type=float, default=ROTATE_SECONDS, help="seconds per view when several"
+    )
+    parser.add_argument(
+        "--repos",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=f"repository list to count today's work in (default: {repos.CONFIG_PATH},"
+        " falling back to github-repos.txt beside the code)",
+    )
+    parser.add_argument(
+        "--github-user",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=f"file holding the GitHub login to rank on gitranks (default: {gitranks.CONFIG_PATH})",
+    )
+    parser.add_argument(
+        "--scholar",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=f"file holding the Google Scholar profile id or URL (default: {scholar.CONFIG_PATH})",
+    )
+    parser.add_argument(
+        "--git-interval",
+        type=float,
+        default=repos.REFRESH_SECONDS,
+        metavar="N",
+        help="seconds between repository rescans",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -210,14 +342,53 @@ def main() -> None:
         # Per-frame chatter from the BLE library would trample the status line.
         logging.getLogger("pypixelcolor").setLevel(logging.WARNING)
 
+    # Only scan repositories if some view actually asks for them.
+    scanner = None
+    if any(view in display.GIT_VIEWS for view in args.view):
+        listed = args.repos or repos.default_path()
+        paths = repos.read_paths(listed)
+        if paths:
+            logger.info("watching %d repositories from %s", len(paths), listed)
+        else:
+            logger.warning("no repositories to watch -- git views will be empty")
+        scanner = repos.Scanner(paths, args.git_interval)
+
+    # Both scrapes are opt-in: no login file, no browser and no requests.
+    ranks = None
+    if any(view in display.GITRANKS_VIEWS for view in args.view):
+        login = read_config(args.github_user, gitranks.read_login, gitranks.CONFIG_PATH, "gitranks")
+        if login:
+            logger.info("ranking %s on gitranks, refreshed daily", login)
+            ranks = gitranks.ranks(login)
+
+    cites = None
+    if any(view in display.SCHOLAR_VIEWS for view in args.view):
+        user = read_config(args.scholar, scholar.read_user, scholar.CONFIG_PATH, "scholar")
+        if user:
+            logger.info("counting citations for %s, refreshed daily", user)
+            cites = scholar.scholar(user)
+
+    panel = Panel(args.view, scanner, ranks, cites, args.interval, args.rotate)
+
+    # A one-shot run exits before a background refresh could finish, so on a
+    # cold cache it has to wait for the scrape rather than draw nothing.
+    if args.once or args.preview:
+        for source in (ranks, cites):
+            if source is not None:
+                source.warm()
+
     if args.preview:
         width, height = args.size
-        image = Panel().frame(width, height) or display.render_message("ERR", width, height)
+        image = panel.frame(width, height) or display.render_message("ERR", width, height)
         image.save(args.preview)
         return
 
+    # Rotation needs a faster loop than the poll; the caches keep it cheap.
+    tick = min(args.interval, args.rotate) if len(args.view) > 1 else args.interval
     try:
-        asyncio.run(serve(run_once(args.address) if args.once else run(args.address, args.interval)))
+        asyncio.run(
+            serve(run_once(args.address, panel) if args.once else run(args.address, panel, tick))
+        )
     except RuntimeError as exc:
         logger.error("%s", exc)
         raise SystemExit(1)

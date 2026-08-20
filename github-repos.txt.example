@@ -1,0 +1,16 @@
+# Repositories to count today's work in -- one absolute path per line.
+#
+# Copy this to ~/.config/claude-ipixel/repos.txt and put your own paths in it:
+#
+#     mkdir -p ~/.config/claude-ipixel
+#     cp github-repos.txt.example ~/.config/claude-ipixel/repos.txt
+#
+# That location is read first and is not part of the checkout, so pulling,
+# moving or reinstalling the code never touches your list, and the list never
+# follows you into a commit.
+#
+# Blank lines and everything after a # are ignored. ~ is expanded.
+# Anything that is not a git repository is skipped with a warning.
+
+~/Programming/project-one
+~/Programming/project-two

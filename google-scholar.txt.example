@@ -1,0 +1,18 @@
+# The Google Scholar profile to count citations for -- one line, nothing else.
+#
+# Either the profile id or the whole URL you have in the address bar:
+#
+#     sDOdhtwAAAAJ
+#     https://scholar.google.gr/citations?user=sDOdhtwAAAAJ&hl=en
+#
+# Copy this to ~/.config/claude-ipixel/google-scholar.txt:
+#
+#     mkdir -p ~/.config/claude-ipixel
+#     echo sDOdhtwAAAAJ > ~/.config/claude-ipixel/google-scholar.txt
+#
+# With no such file the citation views are switched off and nothing is fetched.
+# The profile is read at most once a day and cached in ~/.cache/claude-ipixel.
+#
+# Blank lines and everything after a # are ignored.
+
+sDOdhtwAAAAJ

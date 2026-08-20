@@ -12,6 +12,9 @@ from datetime import datetime, time, timedelta, timezone
 
 from PIL import Image
 
+from gitranks import Profile
+from repos import DayStats
+from scholar import Citations
 from usage import Limit, Usage
 
 DEFAULT_SIZE = (64, 20)
@@ -31,6 +34,9 @@ COLOR_LOW = (255, 80, 0)
 COLOR_EMPTY = (255, 0, 0)
 COLOR_PACE = (255, 0, 0)
 COLOR_PACE_WORK = (255, 255, 0)  # kept off COLOR_WARN so it reads apart from an amber bar
+COLOR_ADD = (0, 224, 90)
+COLOR_DEL = (255, 80, 0)
+COLOR_COMMIT = (80, 160, 255)
 
 # The yellow 7D marker paces the week against working hours alone: Mon-Fri,
 # 09:00-17:00 local, rather than evenly around the clock.
@@ -58,14 +64,35 @@ FONT = {
     "%": ("101", "001", "010", "100", "101"),
     ":": ("000", "010", "000", "010", "000"),
     "-": ("000", "000", "111", "000", "000"),
+    "+": ("000", "010", "111", "010", "000"),
     " ": ("000", "000", "000", "000", "000"),
+    # The whole alphabet, because repository labels are initials of any name.
     "A": ("111", "101", "111", "101", "101"),
+    "B": ("110", "101", "110", "101", "110"),
+    "C": ("111", "100", "100", "100", "111"),
     "D": ("110", "101", "101", "101", "110"),
     "E": ("111", "100", "111", "100", "111"),
+    "F": ("111", "100", "111", "100", "100"),
+    "G": ("111", "100", "101", "101", "111"),
     "H": ("101", "101", "111", "101", "101"),
+    "I": ("111", "010", "010", "010", "111"),
+    "J": ("001", "001", "001", "101", "111"),
+    "K": ("101", "101", "110", "101", "101"),
+    "L": ("100", "100", "100", "100", "111"),
+    "M": ("101", "111", "111", "101", "101"),
+    "N": ("110", "101", "101", "101", "101"),
+    "O": ("111", "101", "101", "101", "111"),
+    "P": ("111", "101", "111", "100", "100"),
+    "Q": ("111", "101", "101", "111", "001"),
     "R": ("111", "101", "111", "110", "101"),
+    "S": ("111", "100", "111", "001", "111"),
     "T": ("111", "010", "010", "010", "010"),
     "U": ("101", "101", "101", "101", "111"),
+    "V": ("101", "101", "101", "101", "010"),
+    "W": ("101", "101", "111", "111", "101"),
+    "X": ("101", "101", "010", "101", "101"),
+    "Y": ("101", "101", "010", "010", "010"),
+    "Z": ("111", "001", "010", "100", "111"),
 }
 
 
@@ -97,17 +124,23 @@ def draw_text(image: Image.Image, text: str, x: int, y: int, color, scale: int =
 @dataclass
 class Layout:
     scale: int
-    row_y: tuple[int, int]
+    row_y: tuple[int, ...]
     bar_x: int
     bar_w: int
     bar_h: int
     show_bar: bool
 
 
-def layout_for(width: int, height: int) -> Layout:
-    """Fit two label/bar/value rows into a panel of the given size."""
-    row_h = height // 2
-    label_w, value_w = LABEL_CHARS * ADVANCE - 1, VALUE_CHARS * ADVANCE - 1
+def layout_for(
+    width: int,
+    height: int,
+    rows: int = 2,
+    label_chars: int = LABEL_CHARS,
+    value_chars: int = VALUE_CHARS,
+) -> Layout:
+    """Fit `rows` label/bar/value rows into a panel of the given size."""
+    row_h = height // rows
+    label_w, value_w = label_chars * ADVANCE - 1, value_chars * ADVANCE - 1
     gap = 3
 
     # Scale up only as far as both the row height and the text width allow...
@@ -127,10 +160,12 @@ def layout_for(width: int, height: int) -> Layout:
 
     bar_x, bar_w = bar_at(scale)
     band = GLYPH_H * scale
-    top = (row_h - band) // 2
+    # Centre the block of rows, so a row count that does not divide the panel
+    # height evenly leaves its slack split top and bottom rather than all below.
+    top = (height - rows * row_h) // 2 + (row_h - band) // 2
     return Layout(
         scale=scale,
-        row_y=(top, row_h + top),
+        row_y=tuple(top + row * row_h for row in range(rows)),
         bar_x=bar_x,
         bar_w=bar_w,
         bar_h=band,
@@ -241,20 +276,29 @@ def _draw_bar(image: Image.Image, layout: Layout, y: int, fraction: float, color
             pixels[x, row] = color
 
 
-def _draw_row(image: Image.Image, layout: Layout, label: str, limit: Limit, y: int) -> None:
-    color = _state_color(limit)
+def _draw_gauge(
+    image: Image.Image,
+    layout: Layout,
+    label: str,
+    value: str,
+    fraction: float,
+    color,
+    y: int,
+) -> None:
+    """One `label · bar · value` row, the shape every view is built from."""
     draw_text(image, label, 0, y, COLOR_LABEL, layout.scale)
+    if layout.show_bar:
+        _draw_bar(image, layout, y, fraction, color)
+    draw_text(image, value, image.width - text_width(value, layout.scale), y, color, layout.scale)
 
+
+def _draw_row(image: Image.Image, layout: Layout, label: str, limit: Limit, y: int) -> None:
     if limit.exhausted:
         # Out of quota: show time until the window rolls over instead of "0%".
         value, fraction = _format_countdown(limit.seconds_until_reset()), 0.0
     else:
         value, fraction = f"{round(limit.remaining)}%", limit.remaining / 100.0
-
-    if layout.show_bar:
-        _draw_bar(image, layout, y, fraction, color)
-
-    draw_text(image, value, image.width - text_width(value, layout.scale), y, color, layout.scale)
+    _draw_gauge(image, layout, label, value, fraction, _state_color(limit), y)
 
 
 def render(usage: Usage, width: int = DEFAULT_SIZE[0], height: int = DEFAULT_SIZE[1]) -> Image.Image:
@@ -306,3 +350,192 @@ def render_message(
         scale,
     )
     return image
+
+
+# --- today's git activity ------------------------------------------------
+#
+# Four ways of looking at the same scan, so there is something to choose
+# between before settling on one: `net` for a single glanceable number,
+# `churn` for the shape of the day's work, `repos` and `commits` for where it
+# went. All of them are drawn from the same row shape as the quota view.
+
+GIT_VIEWS = ("net", "churn", "repos", "commits")
+REPO_LABEL_CHARS = 3
+COUNT_CHARS = 5  # "+9999", "-123K"
+
+
+def _format_count(value: int) -> str:
+    """A line count in at most four characters: 9999, then 10K, then 1M."""
+    value = abs(value)
+    if value < 10000:
+        return str(value)
+    if value < 1000000:
+        return f"{value // 1000}K"
+    return f"{value // 1000000}M"
+
+
+def _signed(value: int) -> str:
+    return ("-" if value < 0 else "+") + _format_count(value)
+
+
+def render_net(stats: DayStats, width: int, height: int) -> Image.Image:
+    """Today's net line count, as large as the panel will take it."""
+    return render_message(
+        _signed(stats.net), width, height, COLOR_ADD if stats.net >= 0 else COLOR_DEL
+    )
+
+
+def render_churn(stats: DayStats, width: int, height: int) -> Image.Image:
+    """Lines added over lines removed today, summed across every repository.
+
+    The two bars split one total, so a day spent deleting reads at a glance.
+    """
+    image = Image.new("RGB", (width, height), (0, 0, 0))
+    layout = layout_for(width, height, label_chars=1, value_chars=COUNT_CHARS)
+    total = stats.churn or 1
+    rows = (("+", stats.added, COLOR_ADD), ("-", stats.removed, COLOR_DEL))
+    for (label, count, color), y in zip(rows, layout.row_y):
+        _draw_gauge(image, layout, label, _format_count(count), count / total, color, y)
+    return image
+
+
+def render_repos(
+    stats: DayStats, width: int, height: int, by_commits: bool = False
+) -> Image.Image:
+    """A row per repository -- initials, share of the day, and its figure.
+
+    Busiest first, so the repositories that fit are the ones worth seeing; the
+    bar is each one's share of the leader rather than of the total, which keeps
+    a lone active repository from drawing a full bar next to three empty ones.
+    """
+    if not stats.repos:
+        return render_message("NONE", width, height, COLOR_LABEL)
+
+    key = (lambda repo: repo.commits) if by_commits else (lambda repo: repo.churn)
+    fits = max(1, height // (GLYPH_H + 1))
+    repos = sorted(stats.repos, key=key, reverse=True)[:fits]
+
+    image = Image.new("RGB", (width, height), (0, 0, 0))
+    layout = layout_for(
+        width, height, len(repos), label_chars=REPO_LABEL_CHARS, value_chars=COUNT_CHARS
+    )
+    leader = max(key(repo) for repo in repos) or 1
+    for repo, y in zip(repos, layout.row_y):
+        if by_commits:
+            value, color = _format_count(repo.commits), COLOR_COMMIT
+        else:
+            value, color = _signed(repo.net), COLOR_ADD if repo.net >= 0 else COLOR_DEL
+        _draw_gauge(image, layout, repo.label, value, key(repo) / leader, color, y)
+    return image
+
+
+def render_git(view: str, stats: DayStats, width: int, height: int) -> Image.Image:
+    if view == "net":
+        return render_net(stats, width, height)
+    if view == "churn":
+        return render_churn(stats, width, height)
+    return render_repos(stats, width, height, by_commits=view == "commits")
+
+
+# --- gitranks standing ---------------------------------------------------
+#
+# Two ways of looking at the daily scrape: `rank` for where the three rankings
+# stand against everyone else, `tier` for the one word the profile page leads
+# with. Both reuse the row shape above.
+
+GITRANKS_VIEWS = ("rank", "tier")
+PERCENT_CHARS = 3  # "50%"
+
+COLOR_TIER = (200, 120, 255)
+
+
+def _rank_color(top_percent: int):
+    if top_percent and top_percent <= 10:
+        return COLOR_GOOD
+    if top_percent and top_percent <= 50:
+        return COLOR_WARN
+    return COLOR_LOW
+
+
+def render_rank(profile: Profile, width: int, height: int) -> Image.Image:
+    """A row per ranking -- stars, contributions, followers.
+
+    The bar is the share of ranked profiles standing below this one, so a full
+    bar means the top of the board rather than the bottom of it.
+    """
+    ranks = [rank for rank in (profile.rank(kind) for kind in ("s", "c", "f")) if rank]
+    if not ranks:
+        return render_message("NONE", width, height, COLOR_LABEL)
+
+    ranks = ranks[: max(1, height // (GLYPH_H + 1))]
+    image = Image.new("RGB", (width, height), (0, 0, 0))
+    layout = layout_for(width, height, len(ranks), label_chars=1, value_chars=PERCENT_CHARS)
+    for rank, y in zip(ranks, layout.row_y):
+        _draw_gauge(
+            image,
+            layout,
+            rank.label,
+            f"{rank.top_percent}%" if rank.top_percent else "--",
+            rank.percentile,
+            _rank_color(rank.top_percent),
+            y,
+        )
+    return image
+
+
+def render_tier(profile: Profile, width: int, height: int) -> Image.Image:
+    """The overall tier, as large as the panel will take it."""
+    tier = profile.global_tier.upper()
+    if not tier:
+        return render_message("NONE", width, height, COLOR_LABEL)
+    return render_message(tier, width, height, COLOR_TIER)
+
+
+def render_gitranks(view: str, profile: Profile, width: int, height: int) -> Image.Image:
+    if view == "tier":
+        return render_tier(profile, width, height)
+    return render_rank(profile, width, height)
+
+
+# --- google scholar ------------------------------------------------------
+#
+# Two views again: `cites` for the number people actually quote, `hindex` for
+# the two indices side by side, each against its all-time total so the bar
+# reads as "how much of this is recent".
+
+SCHOLAR_VIEWS = ("cites", "hindex")
+
+COLOR_CITE = (0, 200, 255)
+COLOR_CITE_RECENT = (0, 224, 90)
+
+
+def render_cites(citations: Citations, width: int, height: int) -> Image.Image:
+    """Total citations, as large as the panel will take it."""
+    return render_message(_format_count(citations.citations), width, height, COLOR_CITE)
+
+
+def render_hindex(citations: Citations, width: int, height: int) -> Image.Image:
+    """h-index and i10-index, with the recent window's share as the bar."""
+    image = Image.new("RGB", (width, height), (0, 0, 0))
+    layout = layout_for(width, height, label_chars=1, value_chars=VALUE_CHARS)
+    rows = (
+        ("H", citations.h_index, citations.recent_h_index),
+        ("I", citations.i10_index, citations.recent_i10_index),
+    )
+    for (label, total, recent), y in zip(rows, layout.row_y):
+        _draw_gauge(
+            image,
+            layout,
+            label,
+            _format_count(total),
+            recent / total if total else 0.0,
+            COLOR_CITE_RECENT,
+            y,
+        )
+    return image
+
+
+def render_scholar(view: str, citations: Citations, width: int, height: int) -> Image.Image:
+    if view == "hindex":
+        return render_hindex(citations, width, height)
+    return render_cites(citations, width, height)
