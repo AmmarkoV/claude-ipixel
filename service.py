@@ -99,6 +99,19 @@ async def discover_address(timeout: float = SCAN_SECONDS) -> str:
     return address
 
 
+def _rotation(views) -> tuple[str, ...]:
+    """The order the panel walks its views in.
+
+    The quota is the figure that moves fastest and the one worth watching, so
+    it takes every other slot rather than coming round once per full turn:
+    quota, net, quota, churn, quota, ... A rotation without it is left alone.
+    """
+    others = [name for name in views if name != VIEW_QUOTA]
+    if VIEW_QUOTA not in views or not others:
+        return tuple(views)
+    return tuple(name for other in others for name in (VIEW_QUOTA, other))
+
+
 class Panel:
     """Turns the usage endpoint, the repository scan and the daily scrapes
     into a frame.
@@ -127,11 +140,11 @@ class Panel:
 
     def view(self, views=None, now: float | None = None) -> str:
         """Which view this moment belongs to, straight off the wall clock."""
-        views = self.views if views is None else views
-        if len(views) == 1:
-            return views[0]
+        order = _rotation(self.views if views is None else views)
+        if len(order) == 1:
+            return order[0]
         now = time.time() if now is None else now
-        return views[int(now // self.rotate) % len(views)]
+        return order[int(now // self.rotate) % len(order)]
 
     def _has_content(self, view: str, stats, profile, citations) -> bool:
         """Whether a view has anything but zeros to show. An idle day, an

@@ -92,7 +92,11 @@ Nine views, from three sources. Most are `label · bar · number` rows; `net`, `
 ./venv/bin/python service.py --view quota,net,cites --rotate 20
 ```
 
-Each source refreshes on **its own schedule**, not once per frame, so rotating costs nothing extra — see [What it costs](#what-it-costs). A view whose source is not configured, or has not answered yet, simply holds the previous frame rather than blanking the panel.
+**The quota takes every other slot.** It is the figure that moves fastest and the one worth watching, so it comes back between each of the others — `quota, net, quota, churn, quota, ...` — rather than once per full turn. A rotation you did not put `quota` in walks its views in order, as before.
+
+**A view with nothing but zeros is passed over.** A day with no commits, a profile with no ranking, a scrape that has not answered yet: rather than spending a slot on `+0` or an empty panel, the rotation skips to the next view that has something to say, and picks it up again the moment it does. If *every* selected view is empty the panel falls back to rotating through them all, so it never goes blank on you.
+
+Each source refreshes on **its own schedule**, not once per frame, so rotating costs nothing extra — see [What it costs](#what-it-costs).
 
 ## Today's git activity
 
@@ -313,7 +317,7 @@ With no arguments it scans for your panel, connects, and redraws every 60 second
 | `--preview PATH` | | Render to a PNG instead of the panel — no Bluetooth needed |
 | `--size WxH` | `64x20` | Panel size for `--preview` only; read from the device otherwise |
 | `--view NAME` | `quota` | What to draw — see [Today's git activity](#todays-git-activity), [gitranks](#your-gitranks-standing) and [Scholar](#google-scholar-citations). Takes a comma-separated list, or `all` |
-| `--rotate N` | `15` | Seconds per view, when more than one is selected |
+| `--rotate N` | `15` | Seconds per view, when more than one is selected. `quota` takes every other slot, so at the default it is back on screen every 30 seconds |
 | `--repos PATH` | `~/.config/claude-ipixel/repos.txt` | Repository list to count today's work in; see [above](#where-the-repository-list-lives) for the full search order |
 | `--github-user PATH` | `~/.config/claude-ipixel/github-user.txt` | GitHub login to rank on gitranks; see [above](#where-the-github-login-lives) |
 | `--scholar PATH` | `~/.config/claude-ipixel/google-scholar.txt` | Google Scholar profile id or URL; see [above](#google-scholar-citations) |
