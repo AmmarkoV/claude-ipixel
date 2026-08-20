@@ -125,6 +125,8 @@ ROWS = [
      display.render_gitranks("rank", RANKED, W, H)),
     ("--view tier", "the tier the profile page leads with",
      display.render_gitranks("tier", RANKED, W, H)),
+    ("--view stars", "total stars, behind the octocat and a star",
+     display.render_gitranks("stars", RANKED, W, H)),
 
     ("GOOGLE SCHOLAR", None, None),
     ("--view cites", "total citations, under a quote mark",

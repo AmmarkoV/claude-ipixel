@@ -71,7 +71,7 @@ On Ctrl+C or `systemctl stop`, the panel is switched off in software before the 
 
 ## The views
 
-Eight views, from three sources. Most are `label · bar · number` rows; `net`, `tier` and `cites` give one figure the whole panel. Pick one with `--view`, or rotate through several:
+Nine views, from three sources. Most are `label · bar · number` rows; `net`, `tier`, `stars` and `cites` give one figure the whole panel. Pick one with `--view`, or rotate through several:
 
 | `--view` | Source | Shows |
 | --- | --- | --- |
@@ -82,6 +82,7 @@ Eight views, from three sources. Most are `label · bar · number` rows; `net`, 
 | `commits` | [git](#todays-git-activity) | The same rows, counted in commits |
 | `rank` | [gitranks](#your-gitranks-standing) | Stars, contributions and followers — each bar how far up the board you are |
 | `tier` | [gitranks](#your-gitranks-standing) | The tier gitranks leads your profile with |
+| `stars` | [gitranks](#your-gitranks-standing) | Your total GitHub stars, behind an octocat and a star |
 | `cites` | [Scholar](#google-scholar-citations) | Your total citation count |
 | `all` | | Rotate through every view above |
 
@@ -170,12 +171,13 @@ In practice a full hour of rotating through every view across three repositories
 
 ## Your gitranks standing
 
-[gitranks.com](https://gitranks.com/) ranks GitHub profiles by stars, by stars on repositories you have merged PRs into, and by followers. Two views put that on the panel:
+[gitranks.com](https://gitranks.com/) ranks GitHub profiles by stars, by stars on repositories you have merged PRs into, and by followers. Three views put that on the panel:
 
 | `--view` | Shows |
 | --- | --- |
 | `rank` | Three rows — `STARS`, `CONTR`, `FOLLW`. The value is the "top N%" the site gives you; the bar is the share of ranked profiles you are above, so a full bar is the top of the board rather than the bottom. The panel font has no lower case, hence the capitals |
 | `tier` | The tier the profile page leads with — `ELITE 1`, `MASTER 5` — as large as the panel will take it |
+| `stars` | The total stars the star ranking is built on, as large as the space beside the marks allows. An octocat says where the figure comes from and a star says what is counted, since a bare number on a panel could be anything. On a panel too narrow for both marks the number takes the whole width |
 
 Bars are green in the top 10%, amber to the halfway mark, orange below it. Everything the page states is parsed, not just what fits on the panel — position, how many are ranked, the percentile, the month's movement, the score, the tier and how far the next one is — and the whole lot goes to the status line and the journal:
 
@@ -217,7 +219,7 @@ Three locations are consulted, first hit wins — the same order as the reposito
 | 2 | `~/.config/claude-ipixel/github-user.txt` | **The normal place** |
 | 3 | `github-user.txt` beside the code | Fallback for running out of a clone. `.gitignore`d |
 
-**With no such file the feature is simply off**: no browser is started, no request is made, and the `rank` and `tier` views draw nothing while the log tells you what is missing. `github-user.txt.example` has the same note in it.
+**With no such file the feature is simply off**: no browser is started, no request is made, and the `rank`, `tier` and `stars` views draw nothing while the log tells you what is missing. `github-user.txt.example` has the same note in it.
 
 ## Google Scholar citations
 
@@ -449,7 +451,7 @@ ALL    6c  +5996   -136     net +5860
 - Every commit on `HEAD` since midnight is counted, whoever wrote it. In a repository you share, a colleague's merge-free commits land in your totals.
 - Lines are a famously poor proxy for work. A generated file or a vendored dependency will dwarf a day of real thinking.
 - The gitranks and Scholar figures are scraped from pages meant for human eyes. A redesign at either end breaks the parse — the views go empty and the log says why, but nothing else stops.
-- gitranks needs a real browser on the machine. Without Firefox and `geckodriver` those two views never fill in.
+- gitranks needs a real browser on the machine. Without Firefox and `geckodriver` those three views never fill in.
 - Bluetooth LE only. Panels with WiFi firmware are not addressed over the network.
 - Not affiliated with, endorsed by, or supported by Anthropic.
 

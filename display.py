@@ -352,6 +352,47 @@ def render_message(
     return image
 
 
+def _render_figure(text: str, marks, color, width: int, height: int) -> Image.Image:
+    """One big number with small marks down its left saying what it counts.
+
+    The marks are sized off the panel alone, never off the number, so working
+    out how much room the number has left is not circular. Each is a
+    `(bitmap, colour, at_top)` triple; `at_top` hangs it from the top edge
+    rather than centring it on the number.
+    """
+    image = Image.new("RGB", (width, height), (0, 0, 0))
+    columns = sum(len(rows[0]) + 2 for rows, _, _ in marks)  # each mark and its gap
+    mark = max(1, min(height // 16, width // 32))
+    # Never let the marks eat more than half the panel: on a square one they
+    # would otherwise leave the number smaller than the marks beside it.
+    while mark > 1 and columns * mark > width // 2:
+        mark -= 1
+    inset = columns * mark
+    if inset + text_width(text, 1) > width:
+        inset, mark = 0, 0  # too narrow to spare the columns; the number wins
+
+    x = 0
+    for rows, mark_color, at_top in marks if mark else ():
+        _blit(image, rows, x, 0 if at_top else (height - len(rows) * mark) // 2, mark_color, mark)
+        x += (len(rows[0]) + 2) * mark
+
+    scale = 1
+    while (
+        text_width(text, scale + 1) <= width - inset
+        and GLYPH_H * (scale + 1) <= height - 2
+    ):
+        scale += 1
+    draw_text(
+        image,
+        text,
+        inset + (width - inset - text_width(text, scale)) // 2,
+        (height - GLYPH_H * scale) // 2,
+        color,
+        scale,
+    )
+    return image
+
+
 # --- today's git activity ------------------------------------------------
 #
 # Four ways of looking at the same scan, so there is something to choose
@@ -452,15 +493,46 @@ def git_has_content(view: str, stats: DayStats) -> bool:
 
 # --- gitranks standing ---------------------------------------------------
 #
-# Two ways of looking at the daily scrape: `rank` for where the three rankings
-# stand against everyone else, `tier` for the one word the profile page leads
-# with. Both reuse the row shape above.
+# Three ways of looking at the daily scrape: `rank` for where the three
+# rankings stand against everyone else, `tier` for the one word the profile
+# page leads with, `stars` for the figure the rankings are built on. The first
+# reuses the row shape above, the other two fill the panel.
 
-GITRANKS_VIEWS = ("rank", "tier")
+GITRANKS_VIEWS = ("rank", "tier", "stars")
 RANK_LABEL_CHARS = 5  # "STARS", "CONTR", "FOLLW"
 PERCENT_CHARS = 3  # "50%"
 
 COLOR_TIER = (200, 120, 255)
+COLOR_STAR = (255, 190, 0)
+COLOR_OCTOCAT = (170, 170, 170)
+
+# The two marks the star count sits behind: the octocat says where the figure
+# comes from, the star says what is being counted. Drawn side by side, small,
+# down the left of the number.
+OCTOCAT = (
+    "01100000110",
+    "01111111110",
+    "11111111111",
+    "11011111011",
+    "11111111111",
+    "11111111111",
+    "11111111111",
+    "01111111110",
+    "00111111100",
+    "00110011000",
+    "00110011000",
+)
+STAR = (
+    "000010000",
+    "000111000",
+    "011111110",
+    "111111111",
+    "011111110",
+    "001111100",
+    "011111110",
+    "011000110",
+    "110000011",
+)
 
 
 def _rank_color(top_percent: int):
@@ -507,9 +579,25 @@ def render_tier(profile: Profile, width: int, height: int) -> Image.Image:
     return render_message(tier, width, height, COLOR_TIER)
 
 
+def render_stars(profile: Profile, width: int, height: int) -> Image.Image:
+    """Total GitHub stars, as large as the space beside the marks allows."""
+    stars = profile.rank("s")
+    if stars is None or not stars.score:
+        return render_message("NONE", width, height, COLOR_LABEL)
+    return _render_figure(
+        _format_count(stars.score),
+        ((OCTOCAT, COLOR_OCTOCAT, False), (STAR, COLOR_STAR, False)),
+        COLOR_STAR,
+        width,
+        height,
+    )
+
+
 def render_gitranks(view: str, profile: Profile, width: int, height: int) -> Image.Image:
     if view == "tier":
         return render_tier(profile, width, height)
+    if view == "stars":
+        return render_stars(profile, width, height)
     return render_rank(profile, width, height)
 
 
@@ -517,6 +605,9 @@ def gitranks_has_content(view: str, profile: Profile) -> bool:
     """Whether the scrape found a standing worth a slot."""
     if view == "tier":
         return bool(profile.global_tier)
+    if view == "stars":
+        stars = profile.rank("s")
+        return stars is not None and stars.score > 0
     return any(rank.position for rank in profile.ranks.values())
 
 
@@ -547,34 +638,13 @@ QUOTE = (
 
 def render_cites(citations: Citations, width: int, height: int) -> Image.Image:
     """Total citations, as large as the space beside the quote mark allows."""
-    image = Image.new("RGB", (width, height), (0, 0, 0))
-    text = _format_count(citations.citations)
-
-    # The mark is sized off the panel alone, never off the number, so that
-    # working out how much room the number has left is not circular.
-    mark = max(1, min(height // 16, width // 32))
-    inset = (len(QUOTE[0]) + 2) * mark
-    if inset + text_width(text, 1) > width:
-        inset, mark = 0, 0  # too narrow to spare a column; the number wins
-
-    scale = 1
-    while (
-        text_width(text, scale + 1) <= width - inset
-        and GLYPH_H * (scale + 1) <= height - 2
-    ):
-        scale += 1
-
-    if mark:
-        _blit(image, QUOTE, 0, 0, COLOR_CITE_MARK, mark)
-    draw_text(
-        image,
-        text,
-        inset + (width - inset - text_width(text, scale)) // 2,
-        (height - GLYPH_H * scale) // 2,
+    return _render_figure(
+        _format_count(citations.citations),
+        ((QUOTE, COLOR_CITE_MARK, True),),
         COLOR_CITE,
-        scale,
+        width,
+        height,
     )
-    return image
 
 
 def render_hindex(citations: Citations, width: int, height: int) -> Image.Image:
