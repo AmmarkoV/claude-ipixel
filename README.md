@@ -11,6 +11,7 @@ Two rows: how much of the rolling **5-hour session** window you have left, and h
 ## Contents
 
 - [What you're looking at](#what-youre-looking-at)
+- [The views](#the-views)
 - [Today's git activity](#todays-git-activity)
   - [Where the repository list lives](#where-the-repository-list-lives)
 - [Your gitranks standing](#your-gitranks-standing)
@@ -30,6 +31,8 @@ Two rows: how much of the rolling **5-hour session** window you have left, and h
 ## What you're looking at
 
 ![panel states](doc/states.png)
+
+Every view the panel can draw, at 64×20. The quota views are the default; the rest are described under [Today's git activity](#todays-git-activity), [Your gitranks standing](#your-gitranks-standing) and [Google Scholar citations](#google-scholar-citations).
 
 Each row is `label · bar · number`. Both the bar and the number show what is **remaining**, so the bar drains as you work.
 
@@ -66,30 +69,42 @@ A single network blip holds the last good frame rather than blanking the panel; 
 
 On Ctrl+C or `systemctl stop`, the panel is switched off in software before the process exits, so it never keeps showing figures from a service that is no longer running. If the panel has stopped answering, the attempt is given five seconds and then abandoned.
 
+## The views
+
+Eight views, from three sources. Most are `label · bar · number` rows; `net`, `tier` and `cites` give one figure the whole panel. Pick one with `--view`, or rotate through several:
+
+| `--view` | Source | Shows |
+| --- | --- | --- |
+| `quota` | usage endpoint | The two quota bars. The default, and what the panel has always drawn |
+| `net` | [git](#todays-git-activity) | Today's net line count across every repository |
+| `churn` | [git](#todays-git-activity) | Lines added over lines removed, splitting one total |
+| `repos` | [git](#todays-git-activity) | A row per repository — initials, share of the day, net lines |
+| `commits` | [git](#todays-git-activity) | The same rows, counted in commits |
+| `rank` | [gitranks](#your-gitranks-standing) | Stars, contributions and followers — each bar how far up the board you are |
+| `tier` | [gitranks](#your-gitranks-standing) | The tier gitranks leads your profile with |
+| `cites` | [Scholar](#google-scholar-citations) | Your total citation count |
+| `all` | | Rotate through every view above |
+
+`--view` also takes a comma-separated selection, so you can rotate through just the ones you care about:
+
+```bash
+./venv/bin/python service.py --view quota,net,cites --rotate 20
+```
+
+Each source refreshes on **its own schedule**, not once per frame, so rotating costs nothing extra — see [What it costs](#what-it-costs). A view whose source is not configured, or has not answered yet, simply holds the previous frame rather than blanking the panel.
+
 ## Today's git activity
 
 Alongside the quota there are four views of how much code you have actually written today, counted straight out of a list of git repositories you keep in your config directory. See [Where the repository list lives](#where-the-repository-list-lives) for how to create it.
 
-Each repository is asked for its commits since **local midnight** on the current `HEAD`, merges excluded. Pick a view with `--view`, or rotate through several:
+Each repository is asked for its commits since **local midnight** on the current `HEAD`, merges excluded:
 
 | `--view` | Shows |
 | --- | --- |
-| `quota` | The two quota bars. The default, and what the panel has always drawn |
 | `net` | Today's net line count across every repository, as large as the panel will take it — green when you are adding, orange when you are deleting |
 | `churn` | Two rows, `+` added over `-` removed. The bars split one total, so a day spent deleting reads at a glance |
 | `repos` | A row per repository — initials, share of the day's churn, and its net lines |
 | `commits` | A row per repository — initials, share of the day's commits, and the count |
-| `rank` | Your three [gitranks](#your-gitranks-standing) rankings — stars, contributions, followers — each bar the share of ranked profiles you are above |
-| `tier` | The tier gitranks leads your profile with, as large as the panel will take it |
-| `cites` | Your [Google Scholar](#google-scholar-citations) citation count, as large as the panel will take it |
-| `hindex` | h-index over i10-index, each bar the share earned in Scholar's recent window |
-| `all` | Rotate through every view above |
-
-`--view` also takes a comma-separated selection, so you can rotate through just the two you care about:
-
-```bash
-./venv/bin/python service.py --view quota,net --rotate 20
-```
 
 Repositories are sorted busiest-first and only as many rows as the panel can hold are drawn, so on a 16-pixel panel you see the top two. Each bar is that repository's share of the *leader* rather than of the total, which stops a lone active repository from drawing a full bar beside three empty ones. Labels are the initials of an underscore- or dash-separated name — `magician_vision_classifier` becomes `MVC` — or the first three letters of a single-word name.
 
@@ -151,7 +166,7 @@ Rotating every 15 seconds does **not** mean scanning every 15 seconds. Both sour
 - **Each repository** gets at most one `git log` per `--git-interval`, and even that is skipped while the repository has not moved. A commit rewrites `.git/logs/HEAD`, so its mtime plus the current date is enough to serve the previous answer from cache. An idle set of repositories costs a `stat` per repository, not a process.
 - **gitranks and Google Scholar** are somebody else's servers, so each is asked **once a day at most** and the answer is kept in `~/.cache/claude-ipixel/`. Neither is touched at all unless one of its views is on screen and its config file exists. A failure backs off for an hour rather than retrying on the next tick, and both refresh on a background thread — a page load that takes a minute never holds up a redraw, the panel simply keeps yesterday's numbers until the new ones land.
 
-In practice a full hour of rotating through all five views across three repositories spawns **three** `git` processes — one per repository, on the first tick — and none after that until you commit something.
+In practice a full hour of rotating through every view across three repositories spawns **three** `git` processes — one per repository, on the first tick — and none after that until you commit something.
 
 ## Your gitranks standing
 
@@ -159,7 +174,7 @@ In practice a full hour of rotating through all five views across three reposito
 
 | `--view` | Shows |
 | --- | --- |
-| `rank` | Three rows — `S`tars, `C`ontributions, `F`ollowers. The value is the "top N%" the site gives you; the bar is the share of ranked profiles you are above, so a full bar is the top of the board rather than the bottom |
+| `rank` | Three rows — `STARS`, `CONTR`, `FOLLW`. The value is the "top N%" the site gives you; the bar is the share of ranked profiles you are above, so a full bar is the top of the board rather than the bottom. The panel font has no lower case, hence the capitals |
 | `tier` | The tier the profile page leads with — `ELITE 1`, `MASTER 5` — as large as the panel will take it |
 
 Bars are green in the top 10%, amber to the halfway mark, orange below it. Everything the page states is parsed, not just what fits on the panel — position, how many are ranked, the percentile, the month's movement, the score, the tier and how far the next one is — and the whole lot goes to the status line and the journal:
@@ -206,12 +221,15 @@ Three locations are consulted, first hit wins — the same order as the reposito
 
 ## Google Scholar citations
 
-If you publish, two more views:
+If you publish, one more view:
 
 | `--view` | Shows |
 | --- | --- |
-| `cites` | Total citations, as large as the panel will take it |
-| `hindex` | Two rows, `H` over `I` — h-index and i10-index. Each bar is the share of that index earned inside Scholar's recent window, so it reads as "how much of this is recent" |
+| `cites` | Total citations, as large as the space beside the quote mark allows |
+
+A closing quote mark sits in the top-left corner, dimmed towards the number's own colour — seven pixels in a corner read as a stuck pixel unless they clearly belong to something. It is there because a bare figure on a panel could be anything; the mark says the number is a citation count. The mark is sized off the panel rather than off the number, so it grows on a larger display without ever squeezing the figure.
+
+A second view, `hindex` — h-index over i10-index, each bar the share of that index earned inside Scholar's recent window — is written but **off the rotation**, since it did not earn a slot. Put `"hindex"` back into `SCHOLAR_VIEWS` in `display.py` to bring it back; the parse always collects the numbers either way.
 
 Configuration is one line, and takes either the profile id or the URL you have in the address bar:
 
