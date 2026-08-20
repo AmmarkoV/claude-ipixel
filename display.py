@@ -437,6 +437,19 @@ def render_git(view: str, stats: DayStats, width: int, height: int) -> Image.Ima
     return render_repos(stats, width, height, by_commits=view == "commits")
 
 
+def git_has_content(view: str, stats: DayStats) -> bool:
+    """Whether today's scan has anything for this view to draw. A day with no
+    committed work would otherwise rotate a screen of zeros onto the panel.
+    """
+    if view == "commits":
+        return stats.commits > 0
+    if view == "repos":
+        return any(repo.churn for repo in stats.repos)
+    if view == "net":
+        return stats.net != 0  # a balanced day draws "+0"; `churn` still has it
+    return stats.churn > 0
+
+
 # --- gitranks standing ---------------------------------------------------
 #
 # Two ways of looking at the daily scrape: `rank` for where the three rankings
@@ -498,6 +511,13 @@ def render_gitranks(view: str, profile: Profile, width: int, height: int) -> Ima
     if view == "tier":
         return render_tier(profile, width, height)
     return render_rank(profile, width, height)
+
+
+def gitranks_has_content(view: str, profile: Profile) -> bool:
+    """Whether the scrape found a standing worth a slot."""
+    if view == "tier":
+        return bool(profile.global_tier)
+    return any(rank.position for rank in profile.ranks.values())
 
 
 # --- google scholar ------------------------------------------------------
@@ -585,3 +605,10 @@ def render_scholar(view: str, citations: Citations, width: int, height: int) -> 
     if view == "hindex":
         return render_hindex(citations, width, height)
     return render_cites(citations, width, height)
+
+
+def scholar_has_content(view: str, citations: Citations) -> bool:
+    """Whether the profile has any figure to show."""
+    if view == "hindex":
+        return bool(citations.h_index or citations.i10_index)
+    return citations.citations > 0

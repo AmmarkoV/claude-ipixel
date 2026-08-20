@@ -125,12 +125,26 @@ class Panel:
         self._quota_status = "starting"
         self._fetched_at = None
 
-    def view(self, now: float | None = None) -> str:
+    def view(self, views=None, now: float | None = None) -> str:
         """Which view this moment belongs to, straight off the wall clock."""
-        if len(self.views) == 1:
-            return self.views[0]
+        views = self.views if views is None else views
+        if len(views) == 1:
+            return views[0]
         now = time.time() if now is None else now
-        return self.views[int(now // self.rotate) % len(self.views)]
+        return views[int(now // self.rotate) % len(views)]
+
+    def _has_content(self, view: str, stats, profile, citations) -> bool:
+        """Whether a view has anything but zeros to show. An idle day, an
+        unranked profile or an uncited paper is not worth a slot in the
+        rotation, so those views are passed over rather than drawn empty.
+        """
+        if view in display.GIT_VIEWS:
+            return stats is not None and display.git_has_content(view, stats)
+        if view in display.GITRANKS_VIEWS:
+            return profile is not None and display.gitranks_has_content(view, profile)
+        if view in display.SCHOLAR_VIEWS:
+            return citations is not None and display.scholar_has_content(view, citations)
+        return True  # the quota always has something to say
 
     def _refresh_usage(self) -> None:
         """Fetch at most once per interval, keeping the outcome for later ticks."""
@@ -174,7 +188,12 @@ class Panel:
             parts.append(scholar.summary(citations))
         self.status = "  |  ".join(parts)
 
-        view = self.view()
+        # Rotate through the views with something on them; if none has, fall
+        # back to the full list rather than leaving the panel with nothing.
+        live = tuple(
+            name for name in self.views if self._has_content(name, stats, profile, citations)
+        )
+        view = self.view(live or self.views)
         if view in display.GIT_VIEWS and stats is not None:
             return display.render_git(view, stats, width, height)
         if view in display.GITRANKS_VIEWS and profile is not None:
