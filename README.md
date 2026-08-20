@@ -30,6 +30,8 @@ Each row is `label · bar · number`. Both the bar and the number show what is *
 
 A red arrow sits above each bar, marking where that bar would stand if the window's quota were spent evenly — the share of the rolling window still to run, so the arrow walks left as the window burns down and snaps back to the right when it resets. Bar filled past the arrow means you are ahead of an even spend; bar short of it means you are burning faster than the clock. The top arrow paces the 5-hour session against 5 hours, the bottom one the week against 7 equal days.
 
+The 7-day row carries a second, yellow arrow that paces the week against *working* hours only — Mon-Fri, 09:00-17:00 local, 40 hours a week rather than 168. It marks where the week bar would stand if the quota were spent evenly across the working time still left in the window, so it sits still overnight and over the weekend and only walks left while you are at the desk. Edit `WORK_DAYS` and `WORK_HOURS` in `display.py` if your week looks different.
+
 The arrows shrink to whatever fits above their bar: a full arrow where there is room, a stub where there is less, a 3-pixel tick on the 16-pixel-high panels. Panels too narrow for a bar have no arrows at all.
 
 | Remaining | Colour |

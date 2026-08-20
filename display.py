@@ -8,6 +8,7 @@ is room. Panels too narrow for a readable bar show the numbers alone.
 """
 
 from dataclasses import dataclass
+from datetime import datetime, time, timedelta, timezone
 
 from PIL import Image
 
@@ -29,6 +30,13 @@ COLOR_WARN = (255, 176, 0)
 COLOR_LOW = (255, 80, 0)
 COLOR_EMPTY = (255, 0, 0)
 COLOR_PACE = (255, 0, 0)
+COLOR_PACE_WORK = (255, 255, 0)  # kept off COLOR_WARN so it reads apart from an amber bar
+
+# The yellow 7D marker paces the week against working hours alone: Mon-Fri,
+# 09:00-17:00 local, rather than evenly around the clock.
+WORK_DAYS = frozenset(range(5))  # Monday..Friday
+WORK_HOURS = (9, 17)
+WEEK_WORK_SECONDS = len(WORK_DAYS) * (WORK_HOURS[1] - WORK_HOURS[0]) * 3600
 
 # Points down at where a bar would stand on an even spend. The top row has only
 # the panel margin above it to work with, so shorter markers are kept for tight
@@ -160,6 +168,30 @@ def pace_fraction(limit: Limit, window_seconds: float) -> float | None:
     return min(1.0, seconds / window_seconds)
 
 
+def _work_seconds(start: datetime, end: datetime) -> float:
+    """Working hours between two naive local datetimes."""
+    total = 0.0
+    day = start.date()
+    while day <= end.date():
+        if day.weekday() in WORK_DAYS:
+            lo = datetime.combine(day, time(WORK_HOURS[0]))
+            hi = datetime.combine(day, time(WORK_HOURS[1]))
+            total += max(0.0, (min(end, hi) - max(start, lo)).total_seconds())
+        day += timedelta(days=1)
+    return total
+
+
+def work_pace_fraction(limit: Limit, now: datetime | None = None) -> float | None:
+    """Where the week bar would stand if its quota were spent evenly across
+    working hours only: the share of the window's working time still to run.
+    None if the reset is unknown."""
+    if limit.resets_at is None:
+        return None
+    start = (now or datetime.now(timezone.utc)).astimezone().replace(tzinfo=None)
+    end = limit.resets_at.astimezone().replace(tzinfo=None)
+    return min(1.0, _work_seconds(start, end) / WEEK_WORK_SECONDS)
+
+
 def _arrow_for(space: int, scale: int) -> tuple[tuple[str, ...], int] | None:
     """Biggest arrow that fits in `space` rows, or None if none does."""
     for rows in ARROWS:
@@ -170,10 +202,9 @@ def _arrow_for(space: int, scale: int) -> tuple[tuple[str, ...], int] | None:
 
 
 def _draw_pace_arrow(
-    image: Image.Image, layout: Layout, limit: Limit, window: float, bar_y: int, space: int
+    image: Image.Image, layout: Layout, fraction: float | None, color, bar_y: int, space: int
 ) -> None:
-    """Mark the even-spend point on a bar, in the rows immediately above it."""
-    fraction = pace_fraction(limit, window)
+    """Mark a pace point on a bar, in the rows immediately above it."""
     if fraction is None or not layout.show_bar:
         return
     arrow = _arrow_for(space, layout.scale)
@@ -186,7 +217,7 @@ def _draw_pace_arrow(
     tip = inner_x + round(inner_w * fraction)
     width = len(rows[0]) * scale
     x = min(max(tip - (len(rows[0]) // 2) * scale, 0), image.width - width)
-    _blit(image, rows, x, bar_y - len(rows) * scale, COLOR_PACE, scale)
+    _blit(image, rows, x, bar_y - len(rows) * scale, color, scale)
 
 
 def _draw_bar(image: Image.Image, layout: Layout, y: int, fraction: float, color) -> None:
@@ -231,16 +262,26 @@ def render(usage: Usage, width: int = DEFAULT_SIZE[0], height: int = DEFAULT_SIZ
     layout = layout_for(width, height)
     _draw_row(image, layout, "5H", usage.session, layout.row_y[0])
     _draw_row(image, layout, "7D", usage.week, layout.row_y[1])
+    week_space = layout.row_y[1] - layout.row_y[0] - layout.bar_h
     _draw_pace_arrow(
-        image, layout, usage.session, SESSION_SECONDS, layout.row_y[0], layout.row_y[0]
+        image,
+        layout,
+        pace_fraction(usage.session, SESSION_SECONDS),
+        COLOR_PACE,
+        layout.row_y[0],
+        layout.row_y[0],
+    )
+    # Yellow first, so the round-the-clock arrow stays on top where they overlap.
+    _draw_pace_arrow(
+        image, layout, work_pace_fraction(usage.week), COLOR_PACE_WORK, layout.row_y[1], week_space
     )
     _draw_pace_arrow(
         image,
         layout,
-        usage.week,
-        WEEK_SECONDS,
+        pace_fraction(usage.week, WEEK_SECONDS),
+        COLOR_PACE,
         layout.row_y[1],
-        layout.row_y[1] - layout.row_y[0] - layout.bar_h,
+        week_space,
     )
     return image
 
