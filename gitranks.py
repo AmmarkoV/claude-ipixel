@@ -42,6 +42,10 @@ logger = logging.getLogger("claude-ipixel")
 # keyed by the one-letter names gitranks uses for them internally.
 CARDS = {"s": "Stars Rank", "c": "Contributor Rank", "f": "Followers Rank"}
 
+# What the panel calls them. Five characters is as much as fits beside a bar,
+# and the panel font has no lower case, so they are drawn as capitals.
+SHORT = {"s": "STARS", "c": "CONTR", "f": "FOLLW"}
+
 
 @dataclass
 class Rank:
@@ -59,7 +63,7 @@ class Rank:
 
     @property
     def label(self) -> str:
-        return self.kind.upper()
+        return SHORT.get(self.kind, self.kind.upper())
 
     @property
     def percentile(self) -> float:

@@ -444,6 +444,7 @@ def render_git(view: str, stats: DayStats, width: int, height: int) -> Image.Ima
 # with. Both reuse the row shape above.
 
 GITRANKS_VIEWS = ("rank", "tier")
+RANK_LABEL_CHARS = 5  # "STARS", "CONTR", "FOLLW"
 PERCENT_CHARS = 3  # "50%"
 
 COLOR_TIER = (200, 120, 255)
@@ -469,7 +470,9 @@ def render_rank(profile: Profile, width: int, height: int) -> Image.Image:
 
     ranks = ranks[: max(1, height // (GLYPH_H + 1))]
     image = Image.new("RGB", (width, height), (0, 0, 0))
-    layout = layout_for(width, height, len(ranks), label_chars=1, value_chars=PERCENT_CHARS)
+    layout = layout_for(
+        width, height, len(ranks), label_chars=RANK_LABEL_CHARS, value_chars=PERCENT_CHARS
+    )
     for rank, y in zip(ranks, layout.row_y):
         _draw_gauge(
             image,
@@ -499,23 +502,66 @@ def render_gitranks(view: str, profile: Profile, width: int, height: int) -> Ima
 
 # --- google scholar ------------------------------------------------------
 #
-# Two views again: `cites` for the number people actually quote, `hindex` for
-# the two indices side by side, each against its all-time total so the bar
-# reads as "how much of this is recent".
+# `cites` is the number people actually quote. `hindex` drew the two indices
+# side by side and is left here, off the rotation, in case it earns its slot
+# back later.
 
-SCHOLAR_VIEWS = ("cites", "hindex")
+SCHOLAR_VIEWS = ("cites",)  # ("cites", "hindex")
 
 COLOR_CITE = (0, 200, 255)
 COLOR_CITE_RECENT = (0, 224, 90)
+# Dimmed towards the number rather than plain grey: seven pixels in a corner
+# read as a stray fault at this size unless they clearly belong to something.
+COLOR_CITE_MARK = (0, 110, 140)
+
+# A closing quotation mark: two blobs, each with its tail falling away to the
+# left. It sits in the corner of the citation count to say what the number is,
+# since a bare figure on a panel could be anything.
+QUOTE = (
+    "0110110",
+    "0110110",
+    "0100100",
+    "1001000",
+)
 
 
 def render_cites(citations: Citations, width: int, height: int) -> Image.Image:
-    """Total citations, as large as the panel will take it."""
-    return render_message(_format_count(citations.citations), width, height, COLOR_CITE)
+    """Total citations, as large as the space beside the quote mark allows."""
+    image = Image.new("RGB", (width, height), (0, 0, 0))
+    text = _format_count(citations.citations)
+
+    # The mark is sized off the panel alone, never off the number, so that
+    # working out how much room the number has left is not circular.
+    mark = max(1, min(height // 16, width // 32))
+    inset = (len(QUOTE[0]) + 2) * mark
+    if inset + text_width(text, 1) > width:
+        inset, mark = 0, 0  # too narrow to spare a column; the number wins
+
+    scale = 1
+    while (
+        text_width(text, scale + 1) <= width - inset
+        and GLYPH_H * (scale + 1) <= height - 2
+    ):
+        scale += 1
+
+    if mark:
+        _blit(image, QUOTE, 0, 0, COLOR_CITE_MARK, mark)
+    draw_text(
+        image,
+        text,
+        inset + (width - inset - text_width(text, scale)) // 2,
+        (height - GLYPH_H * scale) // 2,
+        COLOR_CITE,
+        scale,
+    )
+    return image
 
 
 def render_hindex(citations: Citations, width: int, height: int) -> Image.Image:
-    """h-index and i10-index, with the recent window's share as the bar."""
+    """h-index and i10-index, with the recent window's share as the bar.
+
+    Off the rotation -- put "hindex" back in SCHOLAR_VIEWS to see it again.
+    """
     image = Image.new("RGB", (width, height), (0, 0, 0))
     layout = layout_for(width, height, label_chars=1, value_chars=VALUE_CHARS)
     rows = (
