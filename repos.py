@@ -202,8 +202,23 @@ def summary(stats: DayStats) -> str:
 
 
 if __name__ == "__main__":
+    import argparse
+
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    today = Scanner(read_paths()).stats()
-    for repo in sorted(today.repos, key=lambda repo: repo.churn, reverse=True):
-        print(f"{repo.label:>3}  {repo.commits:3d}c  +{repo.added:<6d} -{repo.removed:<6d}  {repo.name}")
-    print(f"{'ALL':>3}  {today.commits:3d}c  +{today.added:<6d} -{today.removed:<6d}  net {today.net:+d}")
+    parser = argparse.ArgumentParser(description="Today's commits per repository as a markdown table.")
+    parser.add_argument(
+        "--list",
+        nargs="?",
+        default=None,
+        metavar="PATH",
+        help=f"repository list file (default: {CONFIG_PATH})",
+    )
+    args = parser.parse_args()
+    listed = None if args.list is None else Path(args.list)
+    today = Scanner(read_paths(listed)).stats()
+    repos = [repo for repo in today.repos if repo.commits]
+    print("| Repository | Commits | Added | Deleted |")
+    print("|---|---|---|---|")
+    for repo in sorted(repos, key=lambda repo: repo.churn, reverse=True):
+        print(f"| {repo.name} | {repo.commits:,} | {repo.added:,} | {repo.removed:,} |")
+    print(f"| **Total** | **{today.commits:,}** | **{today.added:,}** | **{today.removed:,}** |")
