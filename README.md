@@ -17,6 +17,7 @@ Two rows: how much of the rolling **5-hour session** window you have left, and h
 - [Your gitranks standing](#your-gitranks-standing)
   - [Where the GitHub login lives](#where-the-github-login-lives)
 - [Google Scholar citations](#google-scholar-citations)
+- [Your DeepSeek balance](#your-deepseek-balance)
 - [Requirements](#requirements)
 - [Install](#install)
 - [Usage](#usage)
@@ -32,7 +33,7 @@ Two rows: how much of the rolling **5-hour session** window you have left, and h
 
 ![panel states](doc/states.png)
 
-Every view the panel can draw, at 64×20. The quota views are the default; the rest are described under [Today's git activity](#todays-git-activity), [Your gitranks standing](#your-gitranks-standing) and [Google Scholar citations](#google-scholar-citations).
+Every view the panel can draw, at 64×20. The quota views are the default; the rest are described under [Today's git activity](#todays-git-activity), [Your gitranks standing](#your-gitranks-standing), [Google Scholar citations](#google-scholar-citations) and [Your DeepSeek balance](#your-deepseek-balance).
 
 Each row is `label · bar · number`. Both the bar and the number show what is **remaining**, so the bar drains as you work.
 
@@ -71,7 +72,7 @@ On Ctrl+C or `systemctl stop`, the panel is switched off in software before the 
 
 ## The views
 
-Nine views, from three sources. Most are `label · bar · number` rows; `net`, `tier`, `stars` and `cites` give one figure the whole panel. Pick one with `--view`, or rotate through several:
+Ten views, from four sources. Most are `label · bar · number` rows; `net`, `tier`, `stars`, `cites` and `balance` give one figure the whole panel. Pick one with `--view`, or rotate through several:
 
 | `--view` | Source | Shows |
 | --- | --- | --- |
@@ -84,6 +85,7 @@ Nine views, from three sources. Most are `label · bar · number` rows; `net`, `
 | `tier` | [gitranks](#your-gitranks-standing) | The tier gitranks leads your profile with |
 | `stars` | [gitranks](#your-gitranks-standing) | Your total GitHub stars, behind an octocat and a star |
 | `cites` | [Scholar](#google-scholar-citations) | Your total citation count |
+| `balance` | [DeepSeek](#your-deepseek-balance) | Your remaining DeepSeek API balance, behind a whale and its currency sign |
 | `all` | | Rotate through every view above |
 
 `--view` also takes a comma-separated selection, so you can rotate through just the ones you care about:
@@ -168,6 +170,7 @@ Nothing else changes: the paths inside it are already absolute, and the service 
 Rotating every 15 seconds does **not** mean scanning every 15 seconds. Both sources are polled on their own schedule and cached, so a tick that finds them warm draws entirely from memory:
 
 - **The usage endpoint** is called at most once per `--interval`, no matter how often the frame is redrawn — and not at all if no chosen view is `quota`.
+- **The DeepSeek balance** is asked at most once every ten minutes — and not at all unless the `balance` view is chosen and `deepseek.txt` exists.
 - **Each repository** gets at most one `git log` per `--git-interval`, and even that is skipped while the repository has not moved. A commit rewrites `.git/logs/HEAD`, so its mtime plus the current date is enough to serve the previous answer from cache. An idle set of repositories costs a `stat` per repository, not a process.
 - **gitranks and Google Scholar** are somebody else's servers, so each is asked **once a day at most** and the answer is kept in `~/.cache/claude-ipixel/`. Neither is touched at all unless one of its views is on screen and its config file exists. A failure backs off for an hour rather than retrying on the next tick, and both refresh on a background thread — a page load that takes a minute never holds up a redraw, the panel simply keeps yesterday's numbers until the new ones land.
 
@@ -258,6 +261,35 @@ h-index           11           9
 i10-index         13           9
 ```
 
+## Your DeepSeek balance
+
+If you use the [DeepSeek](https://platform.deepseek.com/) API, one more view:
+
+| `--view` | Shows |
+| --- | --- |
+| `balance` | The balance left on your DeepSeek account, as large as the space beside its currency mark allows |
+
+The figure is your `total_balance` — granted credit plus top-ups, everything left to spend. Cents are shown while they matter (`0.23`, `12.5`) and dropped once the figure passes 10,000 (`12K`). A little whale and the account's currency sign sit before the figure — `$` for a USD account, `¥` for CNY — like the star view's octocat and star. When the balance cannot pay for an API call, the figure draws red.
+
+Configuration is one line — an API key from <https://platform.deepseek.com/api_keys>, in your config directory:
+
+```bash
+mkdir -p ~/.config/claude-ipixel
+echo sk-YOURKEY > ~/.config/claude-ipixel/deepseek.txt
+```
+
+`--deepseek PATH` overrides it, `deepseek.txt` beside the code is the fallback, and with none of them the view is off and nothing is fetched. The key is read fresh from disk on every poll and never logged or written anywhere else. Unlike the daily scrapes this is your own API account, so the balance is asked every ten minutes instead of being cached on disk — it is the one figure on the panel that can move several times a day.
+
+The module runs on its own too:
+
+```bash
+./venv/bin/python deepseek.py
+```
+
+```
+4.64 USD
+```
+
 ## Requirements
 
 - **Firefox and `geckodriver`** — *optional*, and only for the [gitranks](#your-gitranks-standing) views. Everything else, Google Scholar included, runs without them.
@@ -321,6 +353,7 @@ With no arguments it scans for your panel, connects, and redraws every 60 second
 | `--repos PATH` | `~/.config/claude-ipixel/repos.txt` | Repository list to count today's work in; see [above](#where-the-repository-list-lives) for the full search order |
 | `--github-user PATH` | `~/.config/claude-ipixel/github-user.txt` | GitHub login to rank on gitranks; see [above](#where-the-github-login-lives) |
 | `--scholar PATH` | `~/.config/claude-ipixel/google-scholar.txt` | Google Scholar profile id or URL; see [above](#google-scholar-citations) |
+| `--deepseek PATH` | `~/.config/claude-ipixel/deepseek.txt` | DeepSeek API key file; see [above](#your-deepseek-balance) |
 | `--git-interval N` | `300` | Seconds between repository rescans |
 
 ### Finding your panel

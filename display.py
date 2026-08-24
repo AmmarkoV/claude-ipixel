@@ -693,8 +693,23 @@ DEEPSEEK_VIEWS = ("balance",)
 COLOR_DEEPSEEK = (77, 107, 254)
 COLOR_DEEPSEEK_MARK = (38, 53, 127)  # dimmed towards the number, like the quote
 
-# A currency symbol down the left of the figure says what it is, since a bare
-# number on a panel could be anything. DeepSeek bills in CNY; USD is the other.
+# A little whale before the figure says whose balance it is, since a bare
+# number on a panel could be anything; the account's currency sign sits
+# beside it, like the star view's octocat and star. A tiny stylisation of
+# the DeepSeek logo: flukes up, head right.
+WHALE = (
+    ".....111.....",
+    "....11..11...",
+    "...111..111..",
+    "..1111111111.",
+    ".111111111111",
+    "1111111111111",
+    "1111111111111",
+    "1111111111111",
+    ".11111111111.",
+    "..11111111...",
+)
+
 YEN = (
     "10001",
     "01010",
@@ -723,13 +738,16 @@ def _format_balance(value: float) -> str:
 
 
 def render_deepseek(view: str, balance: Balance, width: int, height: int) -> Image.Image:
-    """Remaining DeepSeek balance, as large as the space beside its currency
-    mark allows. A balance that cannot pay for a call draws red."""
-    mark = DOLLAR if balance.currency == "USD" else YEN
+    """Remaining DeepSeek balance: whale and currency sign, then the figure.
+    A balance that cannot pay for a call draws red."""
+    sign = DOLLAR if balance.currency == "USD" else YEN
     color = COLOR_DEEPSEEK if balance.available else COLOR_EMPTY
     return _render_figure(
         _format_balance(balance.total),
-        ((mark, COLOR_DEEPSEEK_MARK, False),),
+        (
+            (WHALE, COLOR_DEEPSEEK_MARK, False),
+            (sign, COLOR_DEEPSEEK_MARK, False),
+        ),
         color,
         width,
         height,
