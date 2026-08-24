@@ -194,12 +194,15 @@ class Panel:
             self._quota_status = _quota_status(self._usage)
 
     def _refresh_balance(self) -> None:
-        """Fetch at most once per deepseek.REFRESH_SECONDS, keeping the last
-        balance on a transient failure -- a blip need not blank the view."""
+        """Fetch the balance on its own slow schedule, keeping the last one
+        on a transient failure -- a blip need not blank the view. A spent
+        balance is asked for even less often, since only a top-up can move it."""
         if not self.deepseek or VIEW_DEEPSEEK not in self.views:
             return
+        spent = self._balance is not None and self._balance.total <= 0
+        interval = deepseek.SPENT_REFRESH_SECONDS if spent else deepseek.REFRESH_SECONDS
         now = time.monotonic()
-        if self._balance_at is not None and now - self._balance_at < deepseek.REFRESH_SECONDS - 0.5:
+        if self._balance_at is not None and now - self._balance_at < interval - 0.5:
             return
         self._balance_at = now
         try:

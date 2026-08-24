@@ -170,7 +170,7 @@ Nothing else changes: the paths inside it are already absolute, and the service 
 Rotating every 15 seconds does **not** mean scanning every 15 seconds. Both sources are polled on their own schedule and cached, so a tick that finds them warm draws entirely from memory:
 
 - **The usage endpoint** is called at most once per `--interval`, no matter how often the frame is redrawn — and not at all if no chosen view is `quota`.
-- **The DeepSeek balance** is asked at most once every ten minutes — and not at all unless the `balance` view is chosen and `deepseek.txt` exists.
+- **The DeepSeek balance** is asked at most once every ten minutes — and not at all unless the `balance` view is chosen and `deepseek.txt` exists. A spent balance is asked once every six hours instead, and its view steps out of the rotation meanwhile.
 - **Each repository** gets at most one `git log` per `--git-interval`, and even that is skipped while the repository has not moved. A commit rewrites `.git/logs/HEAD`, so its mtime plus the current date is enough to serve the previous answer from cache. An idle set of repositories costs a `stat` per repository, not a process.
 - **gitranks and Google Scholar** are somebody else's servers, so each is asked **once a day at most** and the answer is kept in `~/.cache/claude-ipixel/`. Neither is touched at all unless one of its views is on screen and its config file exists. A failure backs off for an hour rather than retrying on the next tick, and both refresh on a background thread — a page load that takes a minute never holds up a redraw, the panel simply keeps yesterday's numbers until the new ones land.
 
@@ -270,6 +270,8 @@ If you use the [DeepSeek](https://platform.deepseek.com/) API, one more view:
 | `balance` | The balance left on your DeepSeek account, as large as the space beside its currency mark allows |
 
 The figure is your `total_balance` — granted credit plus top-ups, everything left to spend. Cents are shown while they matter (`0.23`, `12.5`) and dropped once the figure passes 10,000 (`12K`). A little whale and the account's currency sign sit before the figure — `$` for a USD account, `¥` for CNY — like the star view's octocat and star. When the balance cannot pay for an API call, the figure draws red.
+
+**A balance at zero steps out of the rotation** — the card has nothing to say — and the account is then asked only every six hours instead of every ten minutes, since only a top-up can bring it back. The view returns on its own once there is something in the account again.
 
 Configuration is one line — an API key from <https://platform.deepseek.com/api_keys>, in your config directory:
 

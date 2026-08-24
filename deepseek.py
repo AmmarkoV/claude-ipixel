@@ -21,6 +21,7 @@ EXAMPLE_PATH = Path(__file__).with_name("deepseek.txt.example")
 BALANCE_URL = "https://api.deepseek.com/user/balance"
 TIMEOUT = 15.0
 REFRESH_SECONDS = 600  # a balance barely moves; ten minutes is plenty
+SPENT_REFRESH_SECONDS = 6 * 3600  # at zero, only a top-up can move it
 
 logger = logging.getLogger("claude-ipixel")
 

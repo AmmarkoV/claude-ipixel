@@ -755,5 +755,6 @@ def render_deepseek(view: str, balance: Balance, width: int, height: int) -> Ima
 
 
 def deepseek_has_content(view: str, balance: Balance) -> bool:
-    """Whether a balance was fetched worth a slot."""
-    return balance is not None
+    """Whether a balance was fetched worth a slot. A spent account has
+    nothing to say, so the view steps out of the rotation."""
+    return balance is not None and balance.total > 0
