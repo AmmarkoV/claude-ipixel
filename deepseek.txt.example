@@ -1,0 +1,12 @@
+# Your DeepSeek API key from https://platform.deepseek.com/api_keys -- one
+# line, nothing else.
+#
+# Copy this to ~/.config/claude-ipixel/deepseek.txt and put your own in it:
+#
+#     mkdir -p ~/.config/claude-ipixel
+#     echo sk-YOURKEY > ~/.config/claude-ipixel/deepseek.txt
+#
+# With no such file the balance view is switched off and no request is ever
+# made. Blank lines and everything after a # are ignored.
+
+sk-your-key-here

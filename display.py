@@ -12,6 +12,7 @@ from datetime import datetime, time, timedelta, timezone
 
 from PIL import Image
 
+from deepseek import Balance
 from gitranks import Profile
 from repos import DayStats
 from scholar import Citations
@@ -63,6 +64,7 @@ FONT = {
     "9": ("111", "101", "111", "001", "111"),
     "%": ("101", "001", "010", "100", "101"),
     ":": ("000", "010", "000", "010", "000"),
+    ".": ("000", "000", "000", "000", "010"),
     "-": ("000", "000", "111", "000", "000"),
     "+": ("000", "010", "111", "010", "000"),
     " ": ("000", "000", "000", "000", "000"),
@@ -682,3 +684,58 @@ def scholar_has_content(view: str, citations: Citations) -> bool:
     if view == "hindex":
         return bool(citations.h_index or citations.i10_index)
     return citations.citations > 0
+
+
+# --- deepseek balance ----------------------------------------------------
+
+DEEPSEEK_VIEWS = ("balance",)
+
+COLOR_DEEPSEEK = (77, 107, 254)
+COLOR_DEEPSEEK_MARK = (38, 53, 127)  # dimmed towards the number, like the quote
+
+# A currency symbol down the left of the figure says what it is, since a bare
+# number on a panel could be anything. DeepSeek bills in CNY; USD is the other.
+YEN = (
+    "10001",
+    "01010",
+    "11111",
+    "00100",
+    "11111",
+    "00100",
+)
+DOLLAR = (
+    "00100",
+    "01111",
+    "10100",
+    "01110",
+    "00101",
+    "01110",
+    "00100",
+)
+
+
+def _format_balance(value: float) -> str:
+    """A money figure: cents while they matter, 12K once they stop."""
+    if value >= 10000:
+        return _format_count(int(value))
+    text = f"{value:.2f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def render_deepseek(view: str, balance: Balance, width: int, height: int) -> Image.Image:
+    """Remaining DeepSeek balance, as large as the space beside its currency
+    mark allows. A balance that cannot pay for a call draws red."""
+    mark = DOLLAR if balance.currency == "USD" else YEN
+    color = COLOR_DEEPSEEK if balance.available else COLOR_EMPTY
+    return _render_figure(
+        _format_balance(balance.total),
+        ((mark, COLOR_DEEPSEEK_MARK, False),),
+        color,
+        width,
+        height,
+    )
+
+
+def deepseek_has_content(view: str, balance: Balance) -> bool:
+    """Whether a balance was fetched worth a slot."""
+    return balance is not None

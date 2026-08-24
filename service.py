@@ -12,6 +12,7 @@ from pathlib import Path
 from bleak import BleakScanner
 from pypixelcolor import AsyncClient
 
+import deepseek
 import display
 import gitranks
 import repos
@@ -27,7 +28,8 @@ FAILURES_BEFORE_ERROR = 3  # ride out transient network blips on the last frame
 SHUTDOWN_SECONDS = 5  # give up on the goodbye if the panel stops answering
 
 VIEW_QUOTA = "quota"
-VIEWS = (VIEW_QUOTA,) + display.GIT_VIEWS + display.GITRANKS_VIEWS + display.SCHOLAR_VIEWS
+VIEW_DEEPSEEK = display.DEEPSEEK_VIEWS[0]
+VIEWS = (VIEW_QUOTA,) + display.GIT_VIEWS + display.GITRANKS_VIEWS + display.SCHOLAR_VIEWS + display.DEEPSEEK_VIEWS
 
 logger = logging.getLogger("claude-ipixel")
 
@@ -113,8 +115,8 @@ def _rotation(views) -> tuple[str, ...]:
 
 
 class Panel:
-    """Turns the usage endpoint, the repository scan and the daily scrapes
-    into a frame.
+    """Turns the usage endpoint, the DeepSeek balance, the repository scan and
+    the daily scrapes into a frame.
 
     Every source is polled on its own schedule rather than once per frame, so
     rotating through views every few seconds costs no extra requests and no
@@ -124,11 +126,12 @@ class Panel:
     """
 
     def __init__(self, views=(VIEW_QUOTA,), scanner=None, ranks=None, cites=None,
-                 interval=POLL_SECONDS, rotate=ROTATE_SECONDS):
+                 deepseek=False, interval=POLL_SECONDS, rotate=ROTATE_SECONDS):
         self.views = tuple(views)
         self.scanner = scanner
         self.ranks = ranks
         self.cites = cites
+        self.deepseek = deepseek
         self.interval = interval
         self.rotate = rotate
         self.consecutive_failures = 0
@@ -137,6 +140,8 @@ class Panel:
         self._error = None
         self._quota_status = "starting"
         self._fetched_at = None
+        self._balance = None
+        self._balance_at = None
 
     def view(self, views=None, now: float | None = None) -> str:
         """Which view this moment belongs to, straight off the wall clock."""
@@ -146,7 +151,7 @@ class Panel:
         now = time.time() if now is None else now
         return order[int(now // self.rotate) % len(order)]
 
-    def _has_content(self, view: str, stats, profile, citations) -> bool:
+    def _has_content(self, view: str, stats, profile, citations, balance) -> bool:
         """Whether a view has anything but zeros to show. An idle day, an
         unranked profile or an uncited paper is not worth a slot in the
         rotation, so those views are passed over rather than drawn empty.
@@ -157,6 +162,8 @@ class Panel:
             return profile is not None and display.gitranks_has_content(view, profile)
         if view in display.SCHOLAR_VIEWS:
             return citations is not None and display.scholar_has_content(view, citations)
+        if view in display.DEEPSEEK_VIEWS:
+            return balance is not None and display.deepseek_has_content(view, balance)
         return True  # the quota always has something to say
 
     def _refresh_usage(self) -> None:
@@ -186,13 +193,34 @@ class Panel:
             self._error, self.consecutive_failures = None, 0
             self._quota_status = _quota_status(self._usage)
 
+    def _refresh_balance(self) -> None:
+        """Fetch at most once per deepseek.REFRESH_SECONDS, keeping the last
+        balance on a transient failure -- a blip need not blank the view."""
+        if not self.deepseek or VIEW_DEEPSEEK not in self.views:
+            return
+        now = time.monotonic()
+        if self._balance_at is not None and now - self._balance_at < deepseek.REFRESH_SECONDS - 0.5:
+            return
+        self._balance_at = now
+        try:
+            self._balance = deepseek.fetch()
+        except deepseek.AuthError as exc:
+            logger.error("deepseek auth failed: %s", exc)
+            self._balance = None
+        except Exception as exc:
+            logger.warning("deepseek fetch failed: %s", exc)
+
     def frame(self, width: int, height: int):
         self._refresh_usage()
+        self._refresh_balance()
         stats = self.scanner.stats() if self.scanner is not None else None
         profile = self.ranks.value() if self.ranks is not None else None
         citations = self.cites.value() if self.cites is not None else None
+        balance = self._balance
 
         parts = [self._quota_status] if VIEW_QUOTA in self.views else []
+        if self.deepseek:
+            parts.append(deepseek.summary(balance))
         if stats is not None:
             parts.append(repos.summary(stats))
         if self.ranks is not None:
@@ -204,7 +232,7 @@ class Panel:
         # Rotate through the views with something on them; if none has, fall
         # back to the full list rather than leaving the panel with nothing.
         live = tuple(
-            name for name in self.views if self._has_content(name, stats, profile, citations)
+            name for name in self.views if self._has_content(name, stats, profile, citations, balance)
         )
         view = self.view(live or self.views)
         if view in display.GIT_VIEWS and stats is not None:
@@ -213,6 +241,8 @@ class Panel:
             return display.render_gitranks(view, profile, width, height)
         if view in display.SCHOLAR_VIEWS and citations is not None:
             return display.render_scholar(view, citations, width, height)
+        if view in display.DEEPSEEK_VIEWS and balance is not None:
+            return display.render_deepseek(view, balance, width, height)
         if view != VIEW_QUOTA:
             return None  # its source has nothing yet; leave the last frame up
         if self._usage is not None:
@@ -357,6 +387,13 @@ def main() -> None:
         help=f"file holding the Google Scholar profile id or URL (default: {scholar.CONFIG_PATH})",
     )
     parser.add_argument(
+        "--deepseek",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=f"file holding the DeepSeek API key (default: {deepseek.CONFIG_PATH})",
+    )
+    parser.add_argument(
         "--git-interval",
         type=float,
         default=repos.REFRESH_SECONDS,
@@ -400,7 +437,13 @@ def main() -> None:
             logger.info("counting citations for %s, refreshed daily", user)
             cites = scholar.scholar(user)
 
-    panel = Panel(args.view, scanner, ranks, cites, args.interval, args.rotate)
+    deepseek_key = None
+    if any(view in display.DEEPSEEK_VIEWS for view in args.view):
+        deepseek_key = read_config(args.deepseek, deepseek.read_key, deepseek.CONFIG_PATH, "deepseek")
+        if deepseek_key:
+            logger.info("deepseek balance view enabled")
+
+    panel = Panel(args.view, scanner, ranks, cites, deepseek_key is not None, args.interval, args.rotate)
 
     # A one-shot run exits before a background refresh could finish, so on a
     # cold cache it has to wait for the scrape rather than draw nothing.
