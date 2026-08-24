@@ -695,19 +695,20 @@ COLOR_DEEPSEEK_MARK = (38, 53, 127)  # dimmed towards the number, like the quote
 
 # A little whale before the figure says whose balance it is, since a bare
 # number on a panel could be anything; the account's currency sign sits
-# beside it, like the star view's octocat and star. A tiny stylisation of
-# the DeepSeek logo: flukes up, head right.
+# beside it, like the star view's octocat and star. A tracing of the
+# DeepSeek logo: head lower-left with its open mouth, back arching up to
+# the flukes at the top-right.
 WHALE = (
-    ".....111.....",
-    "....11..11...",
-    "...111..111..",
-    "..1111111111.",
-    ".111111111111",
-    "1111111111111",
-    "1111111111111",
-    "1111111111111",
-    ".11111111111.",
-    "..11111111...",
+    "..1111111.11..1",
+    ".111111111.11111",
+    "11111111111111..",
+    "11...111111111..",
+    "11...1111.111...",
+    "11....1111.111..",
+    "11.....111111...",
+    ".1.....111111...",
+    ".111.111.1111...",
+    "..11111111111...",
 )
 
 YEN = (
