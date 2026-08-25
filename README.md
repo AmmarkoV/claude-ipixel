@@ -295,7 +295,7 @@ The module runs on its own too:
 ## Requirements
 
 - **Firefox and `geckodriver`** — *optional*, and only for the [gitranks](#your-gitranks-standing) views. Everything else, Google Scholar included, runs without them.
-- **An iPixel Color LED matrix.** Developed against a 64×20 panel (device type 5). All twenty sizes that `pypixelcolor` knows about are supported — from 32×16 up to 448×32, plus the square 64×64 — and the layout adapts to whichever one you have. I personally use [this one](https://share.temu.com/8lxqc2v6BUB)
+- **An iPixel Color LED matrix.** Developed against a 64×20 panel (device type 5). All twenty sizes that `pypixelcolor` knows about are supported — from 32×16 up to 448×32, plus the square 64×64 — and the layout adapts to whichever one you have. I personally use [this one](https://share.temu.com/fGWrS2dimOB) (64×20, €24)
 - **Bluetooth LE** on the host.
 - **Python 3.10+** (the code uses `X | None` annotations).
 - **A Claude subscription logged in through [Claude Code](https://claude.com/claude-code).** See [How authorization works](#how-authorization-works) — an `ANTHROPIC_API_KEY` will *not* work.
