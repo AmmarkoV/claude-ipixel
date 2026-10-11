@@ -7,9 +7,9 @@ pixel high panel split into two rows -- scaled up by whole pixels where there
 is room. Panels too narrow for a readable bar show the numbers alone.
 """
 
-import math
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 from PIL import Image
 
@@ -19,6 +19,7 @@ from punch import DAY_NAMES, PunchCard
 from repos import DayStats
 from scholar import Citations
 from usage import Limit, Usage
+from year import History
 
 DEFAULT_SIZE = (64, 20)
 
@@ -498,77 +499,231 @@ def git_has_content(view: str, stats: DayStats) -> bool:
 # --- the punch card ------------------------------------------------------
 #
 # Commits per weekday and hour across every repository, drawn as a grid of
-# dots shaded by commit count -- GitHub's classic punch card. The grid alone
-# is drawn; no panel size this layout knows about has room for an hour axis
-# as well.
+# dots shaded by commit count -- GitHub's classic punch card. Hour marks
+# join in above the grid and day names down the sides wherever the panel
+# has room for them.
 
 PUNCH_VIEWS = ("punch",)
 PUNCH_HOURS = 24
 PUNCH_DAYS = 7
-PUNCH_LABEL_CHARS = 3  # "SUN"
+PUNCH_LABEL_CHARS = 3  # "SUN", "12A"
 
-COLOR_PUNCH = (57, 211, 83)  # GitHub's green
+HOUR_MARKS = ((0, "12A"), (6, "6A"), (12, "12P"), (18, "6P"))
+
+# The heat ramp the dots run through: near black, green, yellow, orange,
+# red. An LED matrix has no anti-aliasing, so hue is what makes two
+# adjacent pixels read apart -- brightness alone washes a full grid into
+# one green. The ramp reuses the panel's own amber/orange/red.
+HEAT_RAMP = (
+    (0.0, (10, 26, 10)),
+    (0.4, (0, 224, 90)),
+    (0.7, (255, 176, 0)),
+    (0.9, (255, 80, 0)),
+    (1.0, (255, 0, 0)),
+)
 
 
-def _punch_color(value: int, peak: int):
-    """The green a commit count earns: the busiest hour is full bright, the
-    quietest shades towards black, and even a single commit stays visible.
-    Log scaled, so the contrast survives whatever the history holds."""
-    share = math.log(value + 1) / math.log(peak + 1)
-    brightness = 0.3 + 0.7 * share  # never quite black
-    return tuple(round(channel * brightness) for channel in COLOR_PUNCH)
+def _heat_share(value: int, ranked: list[int]) -> float:
+    """Where a count stands among the grid's own cells, 0-1.
+
+    Rank rather than share of the peak: a grid where every slot has
+    commits in it would otherwise sit in the top half of the range and
+    read as one solid green.
+    """
+    if len(ranked) < 2:
+        return 1.0
+    share = (bisect_left(ranked, value) + bisect_right(ranked, value) - 1) / 2
+    return share / (len(ranked) - 1)
+
+
+def _heat_color(value: int, ranked: list[int]):
+    """The ramp colour a count earns."""
+    share = _heat_share(value, ranked)
+    for (t0, c0), (t1, c1) in zip(HEAT_RAMP, HEAT_RAMP[1:]):
+        if share <= t1:
+            f = (share - t0) / (t1 - t0)
+            return tuple(round(a + (b - a) * f) for a, b in zip(c0, c1))
+    return HEAT_RAMP[-1][1]
 
 
 def render_punch(card: PunchCard, width: int, height: int) -> Image.Image:
     """Commits per weekday and hour as a grid of dots -- the punch card.
 
     Columns are the 24 hours, rows the 7 days with Sunday on top, and each
-    dot is shaded from bright green to black by the commits that landed in
-    its slot. Empty cells keep a faint grey dot so the grid reads as a
-    grid. Day labels join in on panels wide enough to spare a column on
-    each side, alternating so they do not overlap.
+    dot runs the heat ramp by where its count stands among the grid's own
+    cells, so the busiest hour is always the reddest and the shape of the
+    day reads at a glance. Empty cells keep a faint grey dot.
     """
     if card is None or not card.total:
         return render_message("NONE", width, height, COLOR_LABEL)
 
     cell = max(1, min(width // PUNCH_HOURS, height // PUNCH_DAYS))
     grid_w, grid_h = PUNCH_HOURS * cell, PUNCH_DAYS * cell
-    # Labels need alternate rows at least a glyph apart, and the width for a
-    # column of them on each side of the grid.
     label_w = PUNCH_LABEL_CHARS * ADVANCE - 1
     gap = 2
-    labels = cell >= 3 and 2 * cell >= GLYPH_H and width >= grid_w + 2 * (label_w + gap)
-    block_w = grid_w + (2 * (label_w + gap) if labels else 0)
+
+    hour_marks = cell >= 2 and height >= grid_h + GLYPH_H
+    # Day names need alternate rows at least a glyph apart. Full rows fit
+    # once a cell is three pixels or more, alternating sides; at two pixels
+    # every third row is all there is room for, down the left only.
+    side_w = label_w + gap
+    if cell >= 3 and width >= grid_w + 2 * side_w:
+        day_side = "both"
+    elif cell >= 2 and width >= grid_w + side_w:
+        day_side = "left"
+    else:
+        day_side = None
+
+    block_w = grid_w + (2 * side_w if day_side == "both" else side_w if day_side else 0)
+    block_h = grid_h + (GLYPH_H if hour_marks else 0)
     ox = (width - block_w) // 2
-    oy = (height - grid_h) // 2
+    oy = (height - block_h) // 2
+    grid_x = ox + (side_w if day_side else 0)
+    grid_y = oy + (GLYPH_H if hour_marks else 0)
 
     image = Image.new("RGB", (width, height), (0, 0, 0))
     pixels = image.load()
+
+    ranked = sorted(value for row in card.cells for value in row if value > 0)
     dot = max(1, cell - 1)
     for day in range(PUNCH_DAYS):
         for hour in range(PUNCH_HOURS):
-            cx = ox + hour * cell + cell // 2
-            cy = oy + day * cell + cell // 2
+            cx = grid_x + hour * cell + cell // 2
+            cy = grid_y + day * cell + cell // 2
             value = card.cells[day][hour]
             if value == 0:
                 if cell >= 2:
                     pixels[cx, cy] = COLOR_FRAME  # the faint empty cell
                 continue
-            color = _punch_color(value, card.peak)
+            color = _heat_color(value, ranked)
             for dy in range(dot):
                 for dx in range(dot):
                     pixels[cx - dot // 2 + dx, cy - dot // 2 + dy] = color
 
-    if labels:
+    if hour_marks:
+        for hour, text in HOUR_MARKS:
+            x = grid_x + hour * cell + cell // 2 - label_w // 2
+            draw_text(image, text, x, oy, COLOR_LABEL, 1)
+    if day_side:
         for day, name in enumerate(DAY_NAMES):
-            x = ox - label_w - gap if day % 2 == 0 else ox + grid_w + gap
-            draw_text(image, name, x, oy + day * cell + (cell - GLYPH_H) // 2, COLOR_LABEL, 1)
+            if day_side == "left" and day % 3:
+                continue
+            if day_side == "both":
+                x = ox if day % 2 == 0 else ox + side_w + grid_w + gap
+                y = grid_y + day * cell + (cell - GLYPH_H) // 2
+            else:
+                x = ox
+                y = grid_y - 1 + (5 * day) // 3
+            draw_text(image, name, x, y, COLOR_LABEL, 1)
     return image
 
 
 def punch_has_content(card: PunchCard) -> bool:
     """Whether the scan found a single commit worth a slot."""
     return card is not None and card.total > 0
+
+
+# --- the year graph ------------------------------------------------------
+#
+# Commits per day over the last year across every repository -- GitHub's
+# contribution graph. The columns are weeks and the rows weekdays, on the
+# same heat ramp as the punch card, with month initials along the top and
+# day names down the left wherever the panel has room for them.
+
+YEAR_VIEWS = ("year",)
+YEAR_DAYS = 365
+YEAR_WEEKS = 53  # the most a Sunday-aligned year of columns needs
+YEAR_LABEL_CHARS = 2  # "SU"
+YEAR_DAY_NAMES = ("SU", "MO", "TU", "WE", "TH", "FR", "SA")
+YEAR_MONTHS = "JFMAMJJASOND"
+
+
+def render_year(history: History, width: int, height: int, today: date | None = None) -> Image.Image:
+    """The last year of commits as a grid of dots -- the contribution graph.
+
+    Columns are Sunday-aligned weeks, rows the weekdays with Sunday on
+    top, and each dot runs the heat ramp by where its count stands among
+    the window's own days. Month initials sit above their first visible
+    week, day names down the left, and the days ahead of today in the
+    last column stay black. Panels too narrow for the whole year show as
+    many of the most recent weeks as fit.
+    """
+    if history is None or not history.days:
+        return render_message("NONE", width, height, COLOR_LABEL)
+    today = today or date.today()
+
+    # Fit as much of the year as the panel will hold.
+    side = YEAR_LABEL_CHARS * ADVANCE + 1 if width >= YEAR_WEEKS + YEAR_LABEL_CHARS * ADVANCE + 1 else 0
+    cols = min(YEAR_WEEKS, width - side)
+    col_w = (width - side) // cols
+    months = height >= 7 + GLYPH_H
+    rows = max(1, (height - GLYPH_H) // 7) if months else max(1, height // 7)
+
+    grid_w, grid_h = cols * col_w, 7 * rows
+    block_w = grid_w + side
+    block_h = grid_h + (GLYPH_H if months else 0)
+    ox = (width - block_w) // 2
+    oy = (height - block_h) // 2
+    grid_x = ox + side
+    grid_y = oy + (GLYPH_H if months else 0)
+
+    # Sunday-aligned weeks: the most recent `cols` of them.
+    start = today - timedelta(days=cols * 7 - 1)
+    start -= timedelta(days=(start.weekday() + 1) % 7)
+    days = [start + timedelta(days=i) for i in range(cols * 7)]
+
+    image = Image.new("RGB", (width, height), (0, 0, 0))
+    pixels = image.load()
+
+    ranked = sorted(history.days[day] for day in days if day <= today and history.days.get(day))
+    dw = max(1, col_w - 1)
+    dh = max(1, min(rows - 1, 3))
+    for day in days:
+        if day > today:
+            break  # the days ahead of today in the last column
+        value = history.days.get(day, 0)
+        row = (day.weekday() + 1) % 7  # Python weeks start on Monday
+        col = (day - start).days // 7
+        cx = grid_x + col * col_w + col_w // 2
+        cy = grid_y + row * rows + rows // 2
+        if value == 0:
+            if rows >= 2:
+                pixels[cx, cy] = COLOR_FRAME  # the faint empty day
+            continue
+        color = _heat_color(value, ranked)
+        for dy in range(dh):
+            for dx in range(dw):
+                pixels[cx - dw // 2 + dx, cy - dh // 2 + dy] = color
+
+    if months:
+        last_end = -4
+        month = date(start.year, start.month, 1)
+        while month <= today:
+            col = max(0, (month - start).days // 7)
+            x = grid_x + col * col_w + col_w // 2 - 1
+            if x >= last_end + 2:  # at least a pixel clear of the previous
+                draw_text(image, YEAR_MONTHS[month.month - 1], x, oy, COLOR_LABEL, 1)
+                last_end = x + 3
+            month = date(month.year + (month.month == 12), month.month % 12 + 1, 1)
+
+    if side:
+        # Day names need alternate rows at least a glyph apart; once a row
+        # is a glyph tall every row takes one.
+        every = 1 if rows >= GLYPH_H else 3
+        for day, name in enumerate(YEAR_DAY_NAMES):
+            if day % every:
+                continue
+            y = grid_y - 1 + (5 * day) // 3 if every > 1 else grid_y + day * rows + (rows - GLYPH_H) // 2
+            draw_text(image, name, ox, y, COLOR_LABEL, 1)
+    return image
+
+
+def year_has_content(history: History, today: date | None = None) -> bool:
+    """Whether the last year holds a single commit worth a slot."""
+    if history is None or not history.days:
+        return False
+    today = today or date.today()
+    return any(day >= today - timedelta(days=YEAR_DAYS - 1) for day in history.days)
 
 
 # --- gitranks standing ---------------------------------------------------

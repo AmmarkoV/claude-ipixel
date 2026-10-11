@@ -10,7 +10,7 @@ change the other.
 """
 
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -24,6 +24,7 @@ from punch import PunchCard  # noqa: E402
 from repos import DayStats, RepoStats  # noqa: E402
 from scholar import Citations  # noqa: E402
 from usage import Limit, Usage  # noqa: E402
+from year import History  # noqa: E402
 
 OUTPUT = ROOT / "doc" / "states.png"
 
@@ -100,6 +101,15 @@ PUNCHED = PunchCard([
 """.strip().splitlines()
 ])
 
+# A working year on a fixed calendar, so the sheet stays put: weekday
+# commits with a summer break, ending on the day the caption implies.
+YEAR_TODAY = date(2026, 10, 11)
+YEARED = History()
+for offset in range(365):
+    day = YEAR_TODAY - timedelta(days=offset)
+    if day.weekday() < 5 and day.month not in (7, 8):
+        YEARED.days[day] = 1 + (offset * 7) % 9
+
 CITED = Citations(
     user="sDOdhtwAAAAJ",
     name="Ammar Qammaz",
@@ -137,6 +147,8 @@ ROWS = [
      display.render_git("commits", DAY, W, H)),
     ("--view punch", "commits per weekday and hour, shaded by count",
      display.render_punch(PUNCHED, W, H)),
+    ("--view year", "the last year of commits, day by day",
+     display.render_year(YEARED, W, H, today=YEAR_TODAY)),
 
     ("GITRANKS", None, None),
     ("--view rank", "bar is how far up the board you are",

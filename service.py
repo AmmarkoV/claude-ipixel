@@ -19,6 +19,7 @@ import punch
 import repos
 import scholar
 import usage
+import year
 
 NAME_PREFIX = "LED_BLE_"  # panels advertise as LED_BLE_<last 4 bytes of the MAC>
 SCAN_SECONDS = 8.0
@@ -31,10 +32,12 @@ SHUTDOWN_SECONDS = 5  # give up on the goodbye if the panel stops answering
 VIEW_QUOTA = "quota"
 VIEW_DEEPSEEK = display.DEEPSEEK_VIEWS[0]
 VIEW_PUNCH = display.PUNCH_VIEWS[0]
+VIEW_YEAR = display.YEAR_VIEWS[0]
 VIEWS = (
     (VIEW_QUOTA,)
     + display.GIT_VIEWS
     + display.PUNCH_VIEWS
+    + display.YEAR_VIEWS
     + display.GITRANKS_VIEWS
     + display.SCHOLAR_VIEWS
     + display.DEEPSEEK_VIEWS
@@ -135,7 +138,7 @@ class Panel:
     """
 
     def __init__(self, views=(VIEW_QUOTA,), scanner=None, ranks=None, cites=None,
-                 deepseek=False, punchcard=None, interval=POLL_SECONDS,
+                 deepseek=False, punchcard=None, yearcard=None, interval=POLL_SECONDS,
                  rotate=ROTATE_SECONDS):
         self.views = tuple(views)
         self.scanner = scanner
@@ -143,6 +146,7 @@ class Panel:
         self.cites = cites
         self.deepseek = deepseek
         self.punchcard = punchcard
+        self.yearcard = yearcard
         self.interval = interval
         self.rotate = rotate
         self.consecutive_failures = 0
@@ -162,7 +166,7 @@ class Panel:
         now = time.time() if now is None else now
         return order[int(now // self.rotate) % len(order)]
 
-    def _has_content(self, view: str, stats, profile, citations, balance, punches) -> bool:
+    def _has_content(self, view: str, stats, profile, citations, balance, punches, years) -> bool:
         """Whether a view has anything but zeros to show. An idle day, an
         unranked profile or an uncited paper is not worth a slot in the
         rotation, so those views are passed over rather than drawn empty.
@@ -171,6 +175,8 @@ class Panel:
             return stats is not None and display.git_has_content(view, stats)
         if view in display.PUNCH_VIEWS:
             return punches is not None and display.punch_has_content(punches)
+        if view in display.YEAR_VIEWS:
+            return years is not None and display.year_has_content(years)
         if view in display.GITRANKS_VIEWS:
             return profile is not None and display.gitranks_has_content(view, profile)
         if view in display.SCHOLAR_VIEWS:
@@ -234,6 +240,7 @@ class Panel:
         citations = self.cites.value() if self.cites is not None else None
         balance = self._balance
         punches = self.punchcard.stats() if self.punchcard is not None else None
+        years = self.yearcard.stats() if self.yearcard is not None else None
 
         parts = [self._quota_status] if VIEW_QUOTA in self.views else []
         if self.deepseek:
@@ -242,6 +249,8 @@ class Panel:
             parts.append(repos.summary(stats))
         if self.punchcard is not None:
             parts.append(punch.summary(punches))
+        if self.yearcard is not None:
+            parts.append(year.summary(years))
         if self.ranks is not None:
             parts.append(gitranks.summary(profile))
         if self.cites is not None:
@@ -253,13 +262,15 @@ class Panel:
         live = tuple(
             name
             for name in self.views
-            if self._has_content(name, stats, profile, citations, balance, punches)
+            if self._has_content(name, stats, profile, citations, balance, punches, years)
         )
         view = self.view(live or self.views)
         if view in display.GIT_VIEWS and stats is not None:
             return display.render_git(view, stats, width, height)
         if view in display.PUNCH_VIEWS and punches is not None:
             return display.render_punch(punches, width, height)
+        if view in display.YEAR_VIEWS and years is not None:
+            return display.render_year(years, width, height)
         if view in display.GITRANKS_VIEWS and profile is not None:
             return display.render_gitranks(view, profile, width, height)
         if view in display.SCHOLAR_VIEWS and citations is not None:
@@ -434,16 +445,20 @@ def main() -> None:
         # Per-frame chatter from the BLE library would trample the status line.
         logging.getLogger("pypixelcolor").setLevel(logging.WARNING)
 
-    # The punch card is gated on the GitHub login, like gitranks: with no
-    # github-user.txt the view is off and nothing is scanned for it.
-    punch_login = ""
-    if VIEW_PUNCH in args.view:
-        punch_login = gitranks.read_login(args.github_user) or ""
-        if punch_login:
-            logger.info("punch card for %s, rechecked every few hours", punch_login)
+    # The punch card and the year graph are gated on the GitHub login, like
+    # gitranks: with no github-user.txt the views are off and nothing is
+    # scanned for them.
+    login = ""
+    if VIEW_PUNCH in args.view or VIEW_YEAR in args.view:
+        login = gitranks.read_login(args.github_user) or ""
+        if login:
+            if VIEW_PUNCH in args.view:
+                logger.info("punch card for %s, rechecked every few hours", login)
+            if VIEW_YEAR in args.view:
+                logger.info("year graph for %s, rechecked every few hours", login)
         else:
             logger.warning(
-                "no github login in %s -- the punch view will stay empty",
+                "no github login in %s -- the punch and year views will stay empty",
                 args.github_user or gitranks.CONFIG_PATH,
             )
             logger.warning("create one: mkdir -p %s && echo YOURLOGIN > %s",
@@ -452,7 +467,8 @@ def main() -> None:
     # Only scan repositories if some view actually asks for them.
     scanner = None
     punchcard = None
-    if any(view in display.GIT_VIEWS for view in args.view) or punch_login:
+    yearcard = None
+    if any(view in display.GIT_VIEWS for view in args.view) or login:
         listed = args.repos or repos.default_path()
         paths = repos.read_paths(listed)
         if paths:
@@ -461,8 +477,10 @@ def main() -> None:
             logger.warning("no repositories to watch -- git views will be empty")
         if any(view in display.GIT_VIEWS for view in args.view):
             scanner = repos.Scanner(paths, args.git_interval)
-        if punch_login:
+        if VIEW_PUNCH in args.view and login:
             punchcard = punch.Scanner(paths)
+        if VIEW_YEAR in args.view and login:
+            yearcard = year.Scanner(paths)
 
     # Both scrapes are opt-in: no login file, no browser and no requests.
     ranks = None
@@ -487,13 +505,13 @@ def main() -> None:
 
     panel = Panel(
         args.view, scanner, ranks, cites, deepseek_key is not None, punchcard,
-        args.interval, args.rotate
+        yearcard, args.interval, args.rotate
     )
 
     # A one-shot run exits before a background refresh could finish, so on a
     # cold cache it has to wait for the scrape rather than draw nothing.
     if args.once or args.preview:
-        for source in (ranks, cites, punchcard):
+        for source in (ranks, cites, punchcard, yearcard):
             if source is not None:
                 source.warm()
 
