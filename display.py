@@ -7,6 +7,7 @@ pixel high panel split into two rows -- scaled up by whole pixels where there
 is room. Panels too narrow for a readable bar show the numbers alone.
 """
 
+import math
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
 
@@ -14,6 +15,7 @@ from PIL import Image
 
 from deepseek import Balance
 from gitranks import Profile
+from punch import DAY_NAMES, PunchCard
 from repos import DayStats
 from scholar import Citations
 from usage import Limit, Usage
@@ -491,6 +493,82 @@ def git_has_content(view: str, stats: DayStats) -> bool:
     if view == "net":
         return stats.net != 0  # a balanced day draws "+0"; `churn` still has it
     return stats.churn > 0
+
+
+# --- the punch card ------------------------------------------------------
+#
+# Commits per weekday and hour across every repository, drawn as a grid of
+# dots shaded by commit count -- GitHub's classic punch card. The grid alone
+# is drawn; no panel size this layout knows about has room for an hour axis
+# as well.
+
+PUNCH_VIEWS = ("punch",)
+PUNCH_HOURS = 24
+PUNCH_DAYS = 7
+PUNCH_LABEL_CHARS = 3  # "SUN"
+
+COLOR_PUNCH = (57, 211, 83)  # GitHub's green
+
+
+def _punch_color(value: int, peak: int):
+    """The green a commit count earns: the busiest hour is full bright, the
+    quietest shades towards black, and even a single commit stays visible.
+    Log scaled, so the contrast survives whatever the history holds."""
+    share = math.log(value + 1) / math.log(peak + 1)
+    brightness = 0.3 + 0.7 * share  # never quite black
+    return tuple(round(channel * brightness) for channel in COLOR_PUNCH)
+
+
+def render_punch(card: PunchCard, width: int, height: int) -> Image.Image:
+    """Commits per weekday and hour as a grid of dots -- the punch card.
+
+    Columns are the 24 hours, rows the 7 days with Sunday on top, and each
+    dot is shaded from bright green to black by the commits that landed in
+    its slot. Empty cells keep a faint grey dot so the grid reads as a
+    grid. Day labels join in on panels wide enough to spare a column on
+    each side, alternating so they do not overlap.
+    """
+    if card is None or not card.total:
+        return render_message("NONE", width, height, COLOR_LABEL)
+
+    cell = max(1, min(width // PUNCH_HOURS, height // PUNCH_DAYS))
+    grid_w, grid_h = PUNCH_HOURS * cell, PUNCH_DAYS * cell
+    # Labels need alternate rows at least a glyph apart, and the width for a
+    # column of them on each side of the grid.
+    label_w = PUNCH_LABEL_CHARS * ADVANCE - 1
+    gap = 2
+    labels = cell >= 3 and 2 * cell >= GLYPH_H and width >= grid_w + 2 * (label_w + gap)
+    block_w = grid_w + (2 * (label_w + gap) if labels else 0)
+    ox = (width - block_w) // 2
+    oy = (height - grid_h) // 2
+
+    image = Image.new("RGB", (width, height), (0, 0, 0))
+    pixels = image.load()
+    dot = max(1, cell - 1)
+    for day in range(PUNCH_DAYS):
+        for hour in range(PUNCH_HOURS):
+            cx = ox + hour * cell + cell // 2
+            cy = oy + day * cell + cell // 2
+            value = card.cells[day][hour]
+            if value == 0:
+                if cell >= 2:
+                    pixels[cx, cy] = COLOR_FRAME  # the faint empty cell
+                continue
+            color = _punch_color(value, card.peak)
+            for dy in range(dot):
+                for dx in range(dot):
+                    pixels[cx - dot // 2 + dx, cy - dot // 2 + dy] = color
+
+    if labels:
+        for day, name in enumerate(DAY_NAMES):
+            x = ox - label_w - gap if day % 2 == 0 else ox + grid_w + gap
+            draw_text(image, name, x, oy + day * cell + (cell - GLYPH_H) // 2, COLOR_LABEL, 1)
+    return image
+
+
+def punch_has_content(card: PunchCard) -> bool:
+    """Whether the scan found a single commit worth a slot."""
+    return card is not None and card.total > 0
 
 
 # --- gitranks standing ---------------------------------------------------

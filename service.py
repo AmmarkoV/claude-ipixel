@@ -15,6 +15,7 @@ from pypixelcolor import AsyncClient
 import deepseek
 import display
 import gitranks
+import punch
 import repos
 import scholar
 import usage
@@ -29,7 +30,15 @@ SHUTDOWN_SECONDS = 5  # give up on the goodbye if the panel stops answering
 
 VIEW_QUOTA = "quota"
 VIEW_DEEPSEEK = display.DEEPSEEK_VIEWS[0]
-VIEWS = (VIEW_QUOTA,) + display.GIT_VIEWS + display.GITRANKS_VIEWS + display.SCHOLAR_VIEWS + display.DEEPSEEK_VIEWS
+VIEW_PUNCH = display.PUNCH_VIEWS[0]
+VIEWS = (
+    (VIEW_QUOTA,)
+    + display.GIT_VIEWS
+    + display.PUNCH_VIEWS
+    + display.GITRANKS_VIEWS
+    + display.SCHOLAR_VIEWS
+    + display.DEEPSEEK_VIEWS
+)
 
 logger = logging.getLogger("claude-ipixel")
 
@@ -115,8 +124,8 @@ def _rotation(views) -> tuple[str, ...]:
 
 
 class Panel:
-    """Turns the usage endpoint, the DeepSeek balance, the repository scan and
-    the daily scrapes into a frame.
+    """Turns the usage endpoint, the DeepSeek balance, the repository scans
+    and the daily scrapes into a frame.
 
     Every source is polled on its own schedule rather than once per frame, so
     rotating through views every few seconds costs no extra requests and no
@@ -126,12 +135,14 @@ class Panel:
     """
 
     def __init__(self, views=(VIEW_QUOTA,), scanner=None, ranks=None, cites=None,
-                 deepseek=False, interval=POLL_SECONDS, rotate=ROTATE_SECONDS):
+                 deepseek=False, punchcard=None, interval=POLL_SECONDS,
+                 rotate=ROTATE_SECONDS):
         self.views = tuple(views)
         self.scanner = scanner
         self.ranks = ranks
         self.cites = cites
         self.deepseek = deepseek
+        self.punchcard = punchcard
         self.interval = interval
         self.rotate = rotate
         self.consecutive_failures = 0
@@ -151,13 +162,15 @@ class Panel:
         now = time.time() if now is None else now
         return order[int(now // self.rotate) % len(order)]
 
-    def _has_content(self, view: str, stats, profile, citations, balance) -> bool:
+    def _has_content(self, view: str, stats, profile, citations, balance, punches) -> bool:
         """Whether a view has anything but zeros to show. An idle day, an
         unranked profile or an uncited paper is not worth a slot in the
         rotation, so those views are passed over rather than drawn empty.
         """
         if view in display.GIT_VIEWS:
             return stats is not None and display.git_has_content(view, stats)
+        if view in display.PUNCH_VIEWS:
+            return punches is not None and display.punch_has_content(punches)
         if view in display.GITRANKS_VIEWS:
             return profile is not None and display.gitranks_has_content(view, profile)
         if view in display.SCHOLAR_VIEWS:
@@ -220,12 +233,15 @@ class Panel:
         profile = self.ranks.value() if self.ranks is not None else None
         citations = self.cites.value() if self.cites is not None else None
         balance = self._balance
+        punches = self.punchcard.stats() if self.punchcard is not None else None
 
         parts = [self._quota_status] if VIEW_QUOTA in self.views else []
         if self.deepseek:
             parts.append(deepseek.summary(balance))
         if stats is not None:
             parts.append(repos.summary(stats))
+        if self.punchcard is not None:
+            parts.append(punch.summary(punches))
         if self.ranks is not None:
             parts.append(gitranks.summary(profile))
         if self.cites is not None:
@@ -235,11 +251,15 @@ class Panel:
         # Rotate through the views with something on them; if none has, fall
         # back to the full list rather than leaving the panel with nothing.
         live = tuple(
-            name for name in self.views if self._has_content(name, stats, profile, citations, balance)
+            name
+            for name in self.views
+            if self._has_content(name, stats, profile, citations, balance, punches)
         )
         view = self.view(live or self.views)
         if view in display.GIT_VIEWS and stats is not None:
             return display.render_git(view, stats, width, height)
+        if view in display.PUNCH_VIEWS and punches is not None:
+            return display.render_punch(punches, width, height)
         if view in display.GITRANKS_VIEWS and profile is not None:
             return display.render_gitranks(view, profile, width, height)
         if view in display.SCHOLAR_VIEWS and citations is not None:
@@ -414,16 +434,35 @@ def main() -> None:
         # Per-frame chatter from the BLE library would trample the status line.
         logging.getLogger("pypixelcolor").setLevel(logging.WARNING)
 
+    # The punch card is gated on the GitHub login, like gitranks: with no
+    # github-user.txt the view is off and nothing is scanned for it.
+    punch_login = ""
+    if VIEW_PUNCH in args.view:
+        punch_login = gitranks.read_login(args.github_user) or ""
+        if punch_login:
+            logger.info("punch card for %s, rechecked every few hours", punch_login)
+        else:
+            logger.warning(
+                "no github login in %s -- the punch view will stay empty",
+                args.github_user or gitranks.CONFIG_PATH,
+            )
+            logger.warning("create one: mkdir -p %s && echo YOURLOGIN > %s",
+                           repos.CONFIG_DIR, gitranks.CONFIG_PATH)
+
     # Only scan repositories if some view actually asks for them.
     scanner = None
-    if any(view in display.GIT_VIEWS for view in args.view):
+    punchcard = None
+    if any(view in display.GIT_VIEWS for view in args.view) or punch_login:
         listed = args.repos or repos.default_path()
         paths = repos.read_paths(listed)
         if paths:
             logger.info("watching %d repositories from %s", len(paths), listed)
         else:
             logger.warning("no repositories to watch -- git views will be empty")
-        scanner = repos.Scanner(paths, args.git_interval)
+        if any(view in display.GIT_VIEWS for view in args.view):
+            scanner = repos.Scanner(paths, args.git_interval)
+        if punch_login:
+            punchcard = punch.Scanner(paths)
 
     # Both scrapes are opt-in: no login file, no browser and no requests.
     ranks = None
@@ -446,12 +485,15 @@ def main() -> None:
         if deepseek_key:
             logger.info("deepseek balance view enabled")
 
-    panel = Panel(args.view, scanner, ranks, cites, deepseek_key is not None, args.interval, args.rotate)
+    panel = Panel(
+        args.view, scanner, ranks, cites, deepseek_key is not None, punchcard,
+        args.interval, args.rotate
+    )
 
     # A one-shot run exits before a background refresh could finish, so on a
     # cold cache it has to wait for the scrape rather than draw nothing.
     if args.once or args.preview:
-        for source in (ranks, cites):
+        for source in (ranks, cites, punchcard):
             if source is not None:
                 source.warm()
 

@@ -72,7 +72,7 @@ On Ctrl+C or `systemctl stop`, the panel is switched off in software before the 
 
 ## The views
 
-Ten views, from four sources. Most are `label · bar · number` rows; `net`, `tier`, `stars`, `cites` and `balance` give one figure the whole panel. Pick one with `--view`, or rotate through several:
+Eleven views, from four sources. Most are `label · bar · number` rows; `net`, `tier`, `stars`, `cites` and `balance` give one figure the whole panel. Pick one with `--view`, or rotate through several:
 
 | `--view` | Source | Shows |
 | --- | --- | --- |
@@ -81,6 +81,7 @@ Ten views, from four sources. Most are `label · bar · number` rows; `net`, `ti
 | `churn` | [git](#todays-git-activity) | Lines added over lines removed, splitting one total |
 | `repos` | [git](#todays-git-activity) | A row per repository — initials, share of the day, net lines |
 | `commits` | [git](#todays-git-activity) | The same rows, counted in commits |
+| `punch` | [git](#todays-git-activity) | The classic GitHub punch card — commits per weekday and hour, dots shaded by count |
 | `rank` | [gitranks](#your-gitranks-standing) | Stars, contributions and followers — each bar how far up the board you are |
 | `tier` | [gitranks](#your-gitranks-standing) | The tier gitranks leads your profile with |
 | `stars` | [gitranks](#your-gitranks-standing) | Your total GitHub stars, behind an octocat and a star |
@@ -102,7 +103,7 @@ Each source refreshes on **its own schedule**, not once per frame, so rotating c
 
 ## Today's git activity
 
-Alongside the quota there are four views of how much code you have actually written today, counted straight out of a list of git repositories you keep in your config directory. See [Where the repository list lives](#where-the-repository-list-lives) for how to create it.
+Alongside the quota there are five views of how much code you have actually written, counted straight out of a list of git repositories you keep in your config directory. Four count today's work; the fifth draws the classic GitHub punch card. See [Where the repository list lives](#where-the-repository-list-lives) for how to create the list.
 
 Each repository is asked for its commits since **local midnight** on the current `HEAD`, merges excluded:
 
@@ -112,6 +113,8 @@ Each repository is asked for its commits since **local midnight** on the current
 | `churn` | Two rows, `+` added over `-` removed. The bars split one total, so a day spent deleting reads at a glance |
 | `repos` | A row per repository — initials, share of the day's churn, and its net lines |
 | `commits` | A row per repository — initials, share of the day's commits, and the count |
+
+`punch` is the classic GitHub punch card: commits per weekday and hour, drawn as a grid of dots shaded from bright green to black by commit count — Sunday on top, midnight on the left, empty slots as faint dots. Unlike the rows above it counts the repositories' **entire history** rather than today, merges included. It is gated on the GitHub login: with no `github-user.txt` the view is off and nothing is scanned (see [Where the GitHub login lives](#where-the-github-login-lives)). Panels wide enough get the day names beside the rows; there is no room for an hour axis on any panel size, so the grid stands alone.
 
 Repositories are sorted busiest-first and only as many rows as the panel can hold are drawn, so on a 16-pixel panel you see the top two. Each bar is that repository's share of the *leader* rather than of the total, which stops a lone active repository from drawing a full bar beside three empty ones. Labels are the initials of an underscore- or dash-separated name — `magician_vision_classifier` becomes `MVC` — or the first three letters of a single-word name.
 
@@ -172,6 +175,7 @@ Rotating every 15 seconds does **not** mean scanning every 15 seconds. Both sour
 - **The usage endpoint** is called at most once per `--interval`, no matter how often the frame is redrawn — and not at all if no chosen view is `quota`.
 - **The DeepSeek balance** is asked at most once every ten minutes — and not at all unless the `balance` view is chosen and `deepseek.txt` exists. A spent balance is asked once every six hours instead, and its view steps out of the rotation meanwhile.
 - **Each repository** gets at most one `git log` per `--git-interval`, and even that is skipped while the repository has not moved. A commit rewrites `.git/logs/HEAD`, so its mtime plus the current date is enough to serve the previous answer from cache. An idle set of repositories costs a `stat` per repository, not a process.
+- **The punch card** walks each repository's entire history once, on the first tick, and is rechecked every six hours — a figure that barely moves need not move often. Each recheck is again a `stat` per repository, with a full `git log` only for the ones that have committed since; a repository whose history is too large to walk is skipped with a warning rather than holding the panel up.
 - **gitranks and Google Scholar** are somebody else's servers, so each is asked **once a day at most** and the answer is kept in `~/.cache/claude-ipixel/`. Neither is touched at all unless one of its views is on screen and its config file exists. A failure backs off for an hour rather than retrying on the next tick, and both refresh on a background thread — a page load that takes a minute never holds up a redraw, the panel simply keeps yesterday's numbers until the new ones land.
 
 In practice a full hour of rotating through every view across three repositories spawns **three** `git` processes — one per repository, on the first tick — and none after that until you commit something.

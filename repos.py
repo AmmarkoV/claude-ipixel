@@ -117,7 +117,7 @@ def read_paths(path: Path | None = None) -> list[Path]:
     return paths
 
 
-def _fingerprint(path: Path):
+def fingerprint(path: Path):
     """Cheap stand-in for "has this repository committed anything since?"."""
     for candidate in (path / ".git" / "logs" / "HEAD", path / ".git"):
         try:
@@ -185,7 +185,7 @@ class Scanner:
         today = date.today().toordinal()  # "since midnight" moves at midnight
         repos = []
         for path in self.paths:
-            key = (today, _fingerprint(path))
+            key = (today, fingerprint(path))
             cached = self._cache.get(path)
             if cached is not None and cached[0] == key:
                 repos.append(cached[1])

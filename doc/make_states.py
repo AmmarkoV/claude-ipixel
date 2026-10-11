@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 
 import display  # noqa: E402
 from gitranks import Profile, Rank  # noqa: E402
+from punch import PunchCard  # noqa: E402
 from repos import DayStats, RepoStats  # noqa: E402
 from scholar import Citations  # noqa: E402
 from usage import Limit, Usage  # noqa: E402
@@ -84,6 +85,21 @@ RANKED = Profile(
     },
 )
 
+# Busy weekday afternoons, quiet nights and weekends: the shape the punch
+# card exists to show.
+PUNCHED = PunchCard([
+    [int(n) for n in row.split()]
+    for row in """
+0 0 0 0 0 0 0 0 0 0 0 0 1 1 2 2 1 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 1 2 4 6 6 8 10 9 6 4 3 2 1 0 0
+0 0 0 0 0 0 0 0 1 3 5 8 12 14 16 18 15 12 8 6 4 2 0 0
+0 0 0 0 0 0 0 0 1 4 7 10 14 18 22 24 20 14 10 7 4 2 0 0
+0 0 0 0 0 0 0 0 1 3 6 9 13 15 19 21 17 13 9 6 3 1 0 0
+0 0 0 0 0 0 0 0 0 2 4 7 9 11 13 12 10 8 5 3 1 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 1 1 2 2 3 2 1 0 0 0 0 0 0
+""".strip().splitlines()
+])
+
 CITED = Citations(
     user="sDOdhtwAAAAJ",
     name="Ammar Qammaz",
@@ -119,6 +135,8 @@ ROWS = [
      display.render_git("repos", DAY, W, H)),
     ("--view commits", "the same rows counted in commits",
      display.render_git("commits", DAY, W, H)),
+    ("--view punch", "commits per weekday and hour, shaded by count",
+     display.render_punch(PUNCHED, W, H)),
 
     ("GITRANKS", None, None),
     ("--view rank", "bar is how far up the board you are",
