@@ -70,6 +70,12 @@ A single network blip holds the last good frame rather than blanking the panel; 
 
 On Ctrl+C or `systemctl stop`, the panel is switched off in software before the process exits, so it never keeps showing figures from a service that is no longer running. If the panel has stopped answering, the attempt is given five seconds and then abandoned.
 
+### Switching off at night
+
+`--off-time 1:00-6:00` switches the panel off in software for those hours every day — from the first time inclusive to the second exclusive, on the 24-hour clock, so it goes dark at 1:00 and comes back with a fresh frame at 6:00. The window may wrap past midnight (`23:00-6:00`). The process itself stays up through the night — only the panel sleeps — so the morning's first draw already has current figures, and the panel comes back within one tick after the window ends.
+
+Like the other per-machine settings, the window can live in `~/.config/claude-ipixel/off-time.txt` (one line, `1:00-6:00`) instead of on the command line; `off-time.txt.example` beside the code shows the format. With neither the flag nor the file, the panel is never switched off by the clock.
+
 ## The views
 
 Twelve views, from four sources. Most are `label · bar · number` rows; `net`, `tier`, `stars`, `cites` and `balance` give one figure the whole panel. Pick one with `--view`, or rotate through several:
@@ -359,6 +365,7 @@ With no arguments it scans for your panel, connects, and redraws every 60 second
 | `--size WxH` | `64x20` | Panel size for `--preview` only; read from the device otherwise |
 | `--view NAME` | `quota` | What to draw — see [Today's git activity](#todays-git-activity), [gitranks](#your-gitranks-standing) and [Scholar](#google-scholar-citations). Takes a comma-separated list, or `all` |
 | `--rotate N` | `15` | Seconds per view, when more than one is selected. `quota` takes every other slot, so at the default it is back on screen every 30 seconds |
+| `--off-time H:MM-H:MM` | (none) | Daily window in which the panel is switched off, e.g. `1:00-6:00`; falls back to `~/.config/claude-ipixel/off-time.txt`, and with neither the panel is never switched off — see [Switching off at night](#switching-off-at-night) |
 | `--repos PATH` | `~/.config/claude-ipixel/repos.txt` | Repository list to count today's work in; see [above](#where-the-repository-list-lives) for the full search order |
 | `--github-user PATH` | `~/.config/claude-ipixel/github-user.txt` | GitHub login to rank on gitranks; see [above](#where-the-github-login-lives) |
 | `--scholar PATH` | `~/.config/claude-ipixel/google-scholar.txt` | Google Scholar profile id or URL; see [above](#google-scholar-citations) |

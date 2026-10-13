@@ -29,6 +29,10 @@ RECONNECT_SECONDS = 15
 FAILURES_BEFORE_ERROR = 3  # ride out transient network blips on the last frame
 SHUTDOWN_SECONDS = 5  # give up on the goodbye if the panel stops answering
 
+# The daily window in which the panel is switched off, when one is configured.
+OFF_TIME_PATH = repos.CONFIG_DIR / "off-time.txt"
+LOCAL_OFF_TIME_PATH = Path(__file__).with_name("off-time.txt")
+
 VIEW_QUOTA = "quota"
 VIEW_DEEPSEEK = display.DEEPSEEK_VIEWS[0]
 VIEW_PUNCH = display.PUNCH_VIEWS[0]
@@ -68,6 +72,10 @@ def _format_reset(seconds: float | None) -> str:
     if days:
         return f"{days}d{hours:02d}h"
     return f"{hours}h{minutes:02d}m"
+
+
+def _format_time(minutes: int) -> str:
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
 def _quota_status(current: usage.Usage) -> str:
@@ -295,7 +303,12 @@ async def power_off(client) -> None:
         logger.warning("could not power off the panel: %s", exc or type(exc).__name__)
 
 
-async def run(address: str | None, panel: "Panel", tick: float) -> None:
+async def run(address: str | None, panel: "Panel", tick: float,
+              off_time: tuple[int, int] | None = None) -> None:
+    # What this process last told the panel. It lives outside the reconnect
+    # loop so a drop mid-window or mid-wake cannot leave the panel in the
+    # wrong state.
+    off = False
     while True:
         try:
             # Rediscover on every reconnect: these panels use a random BLE
@@ -304,16 +317,39 @@ async def run(address: str | None, panel: "Panel", tick: float) -> None:
             async with AsyncClient(target) as client:
                 info = client.get_device_info()
                 logger.info("connected to %s (%dx%d)", target, info.width, info.height)
+                # A reconnect can also be the panel coming back from a real
+                # power cut, which forgets a software off -- re-assert it
+                # rather than shine all night.
+                if off and _in_off_time(off_time):
+                    await client.set_power(False)
                 last_png, sent_at = None, None
                 try:
                     while True:
-                        image = panel.frame(info.width, info.height)
-                        if image is not None:
-                            png = _to_png(image)
-                            if png != last_png:
-                                await client.send_image_hex(png.hex(), ".png")
-                                last_png, sent_at = png, time.time()
-                        _write_status(panel.status, sent_at)
+                        if _in_off_time(off_time):
+                            if not off:
+                                await client.set_power(False)
+                                off = True
+                                logger.info(
+                                    "off time -- panel switched off until %s",
+                                    _format_time(off_time[1]),
+                                )
+                            _write_status(
+                                f"off time -- panel off until {_format_time(off_time[1])}",
+                                sent_at,
+                            )
+                        else:
+                            if off:
+                                await client.set_power(True)
+                                off = False
+                                last_png = None  # the panel woke blank; redraw
+                                logger.info("off time over -- panel switched back on")
+                            image = panel.frame(info.width, info.height)
+                            if image is not None:
+                                png = _to_png(image)
+                                if png != last_png:
+                                    await client.send_image_hex(png.hex(), ".png")
+                                    last_png, sent_at = png, time.time()
+                            _write_status(panel.status, sent_at)
                         await asyncio.sleep(tick)
                 except asyncio.CancelledError:
                     await power_off(client)  # still connected here, unlike outside
@@ -376,6 +412,58 @@ def _views(text: str) -> tuple[str, ...]:
     return chosen
 
 
+def _off_time(text: str) -> tuple[int, int]:
+    """'H:MM-H:MM' on the 24-hour clock, as minutes since midnight. The end
+    may be earlier than the start, wrapping the window past midnight."""
+    start_text, _, end_text = text.partition("-")
+    try:
+        start = time.strptime(start_text.strip(), "%H:%M")
+        end = time.strptime(end_text.strip(), "%H:%M")
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"{text!r} is not a H:MM-H:MM window, e.g. 1:00-6:00"
+        ) from None
+    start, end = start.tm_hour * 60 + start.tm_min, end.tm_hour * 60 + end.tm_min
+    if start == end:
+        raise argparse.ArgumentTypeError(f"{text!r} starts and ends at the same time")
+    return start, end
+
+
+def _in_off_time(off_time: tuple[int, int] | None, now: float | None = None) -> bool:
+    """Whether the wall clock is inside the daily off window (start inclusive,
+    end exclusive). None, the default, is never inside."""
+    if off_time is None:
+        return False
+    current = time.localtime(now)
+    minutes = current.tm_hour * 60 + current.tm_min
+    start, end = off_time
+    if start < end:
+        return start <= minutes < end
+    return minutes >= start or minutes < end  # the window wraps past midnight
+
+
+def _configured_off_time() -> tuple[int, int] | None:
+    """The off window from off-time.txt, or None -- which keeps the feature
+    off. The config directory wins over a file beside the code, like every
+    other per-machine setting, and a window that does not parse is ignored
+    with a warning rather than guessed at."""
+    for candidate in (OFF_TIME_PATH, LOCAL_OFF_TIME_PATH):
+        try:
+            lines = candidate.read_text().splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            try:
+                return _off_time(line)
+            except argparse.ArgumentTypeError as exc:
+                logger.warning("ignoring %s: %s", candidate, exc)
+                return None
+    return None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--address", help="BLE MAC address (default: scan for one)")
@@ -397,6 +485,14 @@ def main() -> None:
     )
     parser.add_argument(
         "--rotate", type=float, default=ROTATE_SECONDS, help="seconds per view when several"
+    )
+    parser.add_argument(
+        "--off-time",
+        type=_off_time,
+        default=None,
+        metavar="H:MM-H:MM",
+        help="daily window in which the panel is switched off, e.g. 1:00-6:00 "
+             "(default: from off-time.txt if it exists, else never)",
     )
     parser.add_argument(
         "--repos",
@@ -444,6 +540,17 @@ def main() -> None:
     if INTERACTIVE:
         # Per-frame chatter from the BLE library would trample the status line.
         logging.getLogger("pypixelcolor").setLevel(logging.WARNING)
+
+    # Off-time is a panel-wide setting, not a view: with no --off-time the
+    # window comes from off-time.txt, and with neither the panel is never
+    # switched off by the clock.
+    off_time = args.off_time if args.off_time is not None else _configured_off_time()
+    if off_time is not None:
+        logger.info(
+            "panel switched off daily %s-%s",
+            _format_time(off_time[0]),
+            _format_time(off_time[1]),
+        )
 
     # The punch card and the year graph are gated on the GitHub login, like
     # gitranks: with no github-user.txt the views are off and nothing is
@@ -525,7 +632,8 @@ def main() -> None:
     tick = min(args.interval, args.rotate) if len(args.view) > 1 else args.interval
     try:
         asyncio.run(
-            serve(run_once(args.address, panel) if args.once else run(args.address, panel, tick))
+            serve(run_once(args.address, panel) if args.once
+                  else run(args.address, panel, tick, off_time))
         )
     except RuntimeError as exc:
         logger.error("%s", exc)

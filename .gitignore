@@ -1,0 +1,8 @@
+venv/
+__pycache__/
+*.pyc
+github-repos.txt
+github-user.txt
+google-scholar.txt
+deepseek.txt
+off-time.txt

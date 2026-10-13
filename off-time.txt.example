@@ -1,0 +1,16 @@
+# Daily window in which the panel is switched off -- one line, nothing else.
+#
+# Copy this to ~/.config/claude-ipixel/off-time.txt and set your own:
+#
+#     mkdir -p ~/.config/claude-ipixel
+#     echo 1:00-6:00 > ~/.config/claude-ipixel/off-time.txt
+#
+# The panel is dark from the first time (inclusive) to the second
+# (exclusive) on the 24-hour clock, and the window may wrap past
+# midnight: 23:00-6:00. --off-time 1:00-6:00 on the command line does
+# the same thing without a file.
+#
+# With no such file and no --off-time the panel is never switched off by
+# the clock. Blank lines and everything after a # are ignored.
+
+1:00-6:00
