@@ -506,9 +506,11 @@ def git_has_content(view: str, stats: DayStats) -> bool:
 PUNCH_VIEWS = ("punch",)
 PUNCH_HOURS = 24
 PUNCH_DAYS = 7
-PUNCH_LABEL_CHARS = 3  # "SUN", "12A"
+PUNCH_LABEL_CHARS = 3  # "SUN", "24H"
 
-HOUR_MARKS = ((0, "12A"), (6, "6A"), (12, "12P"), (18, "6P"))
+# The ends of the grid and its middle: midnight, midday, midnight again.
+# Four marks would not clear each other on a panel this narrow.
+HOUR_MARKS = ("0H", "12H", "24H")
 
 # The heat ramp the dots run through: near black, green, yellow, orange,
 # red. An LED matrix has no anti-aliasing, so hue is what makes two
@@ -601,9 +603,16 @@ def render_punch(card: PunchCard, width: int, height: int) -> Image.Image:
                     pixels[cx - dot // 2 + dx, cy - dot // 2 + dy] = color
 
     if hour_marks:
-        for hour, text in HOUR_MARKS:
-            x = grid_x + hour * cell + cell // 2 - label_w // 2
-            draw_text(image, text, x, oy, COLOR_LABEL, 1)
+        start_text, mid_text, end_text = HOUR_MARKS
+        draw_text(image, start_text, grid_x, oy, COLOR_LABEL, 1)
+        draw_text(
+            image, mid_text,
+            grid_x + (grid_w - text_width(mid_text)) // 2, oy, COLOR_LABEL, 1,
+        )
+        draw_text(
+            image, end_text,
+            grid_x + grid_w - text_width(end_text), oy, COLOR_LABEL, 1,
+        )
     if day_side:
         for day, name in enumerate(DAY_NAMES):
             if day_side == "left" and day % 3:
@@ -627,7 +636,7 @@ def punch_has_content(card: PunchCard) -> bool:
 #
 # Commits per day over the last year across every repository -- GitHub's
 # contribution graph. The columns are weeks and the rows weekdays, on the
-# same heat ramp as the punch card, with month initials along the top and
+# same heat ramp as the punch card, with month numbers along the top and
 # day names down the left wherever the panel has room for them.
 
 YEAR_VIEWS = ("year",)
@@ -635,7 +644,6 @@ YEAR_DAYS = 365
 YEAR_WEEKS = 53  # the most a Sunday-aligned year of columns needs
 YEAR_LABEL_CHARS = 2  # "SU"
 YEAR_DAY_NAMES = ("SU", "MO", "TU", "WE", "TH", "FR", "SA")
-YEAR_MONTHS = "JFMAMJJASOND"
 
 
 def render_year(history: History, width: int, height: int, today: date | None = None) -> Image.Image:
@@ -643,7 +651,7 @@ def render_year(history: History, width: int, height: int, today: date | None = 
 
     Columns are Sunday-aligned weeks, rows the weekdays with Sunday on
     top, and each dot runs the heat ramp by where its count stands among
-    the window's own days. Month initials sit above their first visible
+    the window's own days. Month numbers sit above their first visible
     week, day names down the left, and the days ahead of today in the
     last column stay black. Panels too narrow for the whole year show as
     many of the most recent weeks as fit.
@@ -696,14 +704,21 @@ def render_year(history: History, width: int, height: int, today: date | None = 
                 pixels[cx - dw // 2 + dx, cy - dh // 2 + dy] = color
 
     if months:
+        # A week is a pixel or two wide, so a two-digit month is wider than
+        # the month it labels: a number that would touch the one before it
+        # is dropped rather than squeezed, and the run of numbers still says
+        # which month the gap was.
         last_end = -4
         month = date(start.year, start.month, 1)
         while month <= today:
+            text = str(month.month)
+            label_w = text_width(text)
             col = max(0, (month - start).days // 7)
-            x = grid_x + col * col_w + col_w // 2 - 1
+            x = grid_x + col * col_w + col_w // 2 - label_w // 2
+            x = max(grid_x - 1, min(x, width - label_w))
             if x >= last_end + 2:  # at least a pixel clear of the previous
-                draw_text(image, YEAR_MONTHS[month.month - 1], x, oy, COLOR_LABEL, 1)
-                last_end = x + 3
+                draw_text(image, text, x, oy, COLOR_LABEL, 1)
+                last_end = x + label_w - 1
             month = date(month.year + (month.month == 12), month.month % 12 + 1, 1)
 
     if side:
